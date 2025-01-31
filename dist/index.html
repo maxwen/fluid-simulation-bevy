@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <title>bevyPlayground</title>
+    <link rel="stylesheet" href="/main-a684d5af31dd5425.css" integrity="sha384&#x2D;1LvcQhT8mxzuThsWZp9vLtjCll0Ah67LGsbcSBWXmrS1JbZJL2LgTClvetGHRqjA"/>
+    
+<script type="module">
+import init, * as bindings from '/bevyPlayground-601acc647d6d5b03.js';
+const wasm = await init('/bevyPlayground-601acc647d6d5b03_bg.wasm');
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+
+<link rel="modulepreload" href="/bevyPlayground-601acc647d6d5b03.js" crossorigin=anonymous integrity="sha384-BjCvEviHT1ivhEMXxLRrxSBl1ViVr6eDSzdXS+pT2VDt475Asjk7Aj2t58rNJe3b">
+<link rel="preload" href="/bevyPlayground-601acc647d6d5b03_bg.wasm" crossorigin=anonymous integrity="sha384-OhHSsXs5p/cWVsS5wLSs5pzH6FD2nlzSNMcSuO5NHROmSQBHouqdIQI1vcSIywe4" as="fetch" type="application/wasm"></head>
+</html>
