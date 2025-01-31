@@ -1,5 +1,4 @@
-use std::cell::{Ref, RefCell};
-use crate::vector::MyVector;
+use bevy::prelude::Vec2;
 use rand::Rng;
 use std::cmp::min;
 use std::collections::HashMap;
@@ -12,9 +11,9 @@ const PRIME2: u64 = 7528850467;
 
 #[derive(Debug)]
 pub struct Particle {
-    pub pos: MyVector,
-    previous_pos: MyVector,
-    velocity: MyVector,
+    pub pos: Vec2,
+    previous_pos: Vec2,
+    velocity: Vec2,
     pub radius: f32,
     pub color: [u8; 4],
     id: u32,
@@ -22,27 +21,27 @@ pub struct Particle {
 
 impl Particle {
     pub fn get_display_pos(&self) -> (u32, u32) {
-        (self.pos.x() as u32, self.pos.y() as u32)
+        (self.pos.x as u32, self.pos.y as u32)
     }
 
-    fn update_position(&mut self, pos: MyVector) {
+    fn update_position(&mut self, pos: Vec2) {
         self.previous_pos = self.pos;
         self.pos = pos;
     }
 
     fn get_border_x_min(&self) -> f32 {
-        self.pos.x() - self.radius
+        self.pos.x - self.radius
     }
 
     fn get_border_x_max(&self) -> f32 {
-        self.pos.x() + self.radius
+        self.pos.x + self.radius
     }
     fn get_border_y_min(&self) -> f32 {
-        self.pos.y() - self.radius
+        self.pos.y - self.radius
     }
 
     fn get_border_y_max(&self) -> f32 {
-        self.pos.y() + self.radius
+        self.pos.y + self.radius
     }
 
     fn set_color(&mut self, color: [u8; 4]) {
@@ -64,9 +63,9 @@ impl ParticleHashGrid {
         }
     }
 
-    fn cell_hash_from_pos(&self, particle_pos: &MyVector) -> u64 {
-        let x = (particle_pos.x() as u32 / self.cell_size) as u64;
-        let y = (particle_pos.y() as u32 / self.cell_size) as u64;
+    fn cell_hash_from_pos(&self, particle_pos: &Vec2) -> u64 {
+        let x = (particle_pos.x as u32 / self.cell_size) as u64;
+        let y = (particle_pos.y as u32 / self.cell_size) as u64;
         let x_prime = x.checked_mul(PRIME1);
         let y_prime = y.checked_mul(PRIME2);
         if x_prime.is_some() && y_prime.is_some() {
@@ -115,7 +114,7 @@ impl ParticleHashGrid {
         }
     }
 
-    pub fn get_cell_particle_ids_from_pos(&self, pos: &MyVector) -> Vec<u32> {
+    pub fn get_cell_particle_ids_from_pos(&self, pos: &Vec2) -> Vec<u32> {
         let hash = self.cell_hash_from_pos(pos);
         self.get_cell_particle_ids_from_hash(hash)
     }
@@ -123,7 +122,7 @@ impl ParticleHashGrid {
 pub struct ParticleWorld {
     velocity_damping: f32,
     collision_damping: f32,
-    gravity: MyVector,
+    gravity: Vec2,
     rest_density: f32,
     k_near: f32,
     k: f32,
@@ -137,7 +136,7 @@ impl ParticleWorld {
         ParticleWorld {
             velocity_damping: 1.0,
             collision_damping: 1.0,
-            gravity: MyVector::new(0.0, 10.0),
+            gravity: Vec2::new(0.0, 10.0),
             rest_density: 30.0,
             k_near: 3.0,
             k: 0.05,
@@ -152,16 +151,16 @@ impl ParticleWorld {
         let y_particles = x_particles;
         let radius = 2;
 
-        let mut x_start = self.width / 2 - x_particles * radius/ 2;
+        let mut x_start = self.width / 2 - x_particles * radius / 2;
         let mut y_start = self.height / 2 - y_particles * radius / 2;
         let mut id = 0;
         for _ in 0..x_particles {
             for _ in 0..y_particles {
                 let p = Particle {
-                    pos: MyVector::new_u32(x_start, y_start),
-                    previous_pos: MyVector::new_u32(x_start, y_start),
+                    pos: Vec2::new(x_start as f32, y_start as f32),
+                    previous_pos: Vec2::new(x_start as f32, y_start as f32),
                     // velocity: self.get_random_speed() * 10.0,
-                    velocity: MyVector::zero(),
+                    velocity: Vec2::ZERO,
                     radius: radius as f32,
                     color: [0xac, 0x00, 0xe6, 0xff],
                     id,
@@ -197,22 +196,18 @@ impl ParticleWorld {
     pub fn check_boundaries_gas(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(id, p)| {
             if p.get_border_x_min() <= 0.0 {
-                p.pos.set_x(p.radius);
-                p.velocity
-                    .set_x(p.velocity.x() * -1.0 * self.collision_damping);
+                p.pos.x = p.radius;
+                p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
             } else if p.get_border_x_max() >= self.width as f32 {
-                p.pos.set_x((self.width - 1) as f32 - p.radius);
-                p.velocity
-                    .set_x(p.velocity.x() * -1.0 * self.collision_damping);
+                p.pos.x = (self.width - 1) as f32 - p.radius;
+                p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
             }
             if p.get_border_y_min() <= 0.0 {
-                p.pos.set_y(p.radius);
-                p.velocity
-                    .set_y(p.velocity.y() * -1.0 * self.collision_damping);
+                p.pos.y = p.radius;
+                p.velocity.y = p.velocity.y * -1.0 * self.collision_damping;
             } else if p.get_border_y_max() >= self.height as f32 {
-                p.pos.set_y((self.height - 1) as f32 - p.radius);
-                p.velocity
-                    .set_y(p.velocity.y() * -1.0 * self.collision_damping);
+                p.pos.y = (self.height - 1) as f32 - p.radius;
+                p.velocity.y = p.velocity.y * -1.0 * self.collision_damping;
             }
         })
     }
@@ -221,24 +216,24 @@ impl ParticleWorld {
     pub fn check_boundaries_fluid(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(id, p)| {
             if p.get_border_x_min() <= 0.0 {
-                p.pos.set_x(p.radius);
+                p.pos.x = p.radius;
                 p.update_position(p.pos);
             } else if p.get_border_x_max() >= self.width as f32 {
-                p.pos.set_x((self.width - 1) as f32 - p.radius);
+                p.pos.x = (self.width - 1) as f32 - p.radius;
                 p.update_position(p.pos);
             }
             if p.get_border_y_min() <= 0.0 {
-                p.pos.set_y(p.radius);
+                p.pos.y = p.radius;
                 p.update_position(p.pos);
             } else if p.get_border_y_max() >= self.height as f32 {
-                p.pos.set_y((self.height - 1) as f32 - p.radius);
+                p.pos.y = (self.height - 1) as f32 - p.radius;
                 p.update_position(p.pos);
             }
         })
     }
 
-    fn get_random_speed(&self) -> MyVector {
-        MyVector::new(
+    fn get_random_speed(&self) -> Vec2 {
+        Vec2::new(
             rand::rng().random_range(MIN_PARTICLE_SPEED..MAX_PARTICLE_SPEED),
             rand::rng().random_range(0.0..MAX_PARTICLE_SPEED),
         )
@@ -250,12 +245,12 @@ impl ParticleWorld {
         hash_grid: &ParticleHashGrid,
         id: u32,
         id_list: &mut Vec<u32>,
-        center_pos: &MyVector,
+        center_pos: &Vec2,
         influence_distance: f32,
     ) {
         let p = particles_map.get(&id).unwrap();
-        let x = p.pos.x() as u32 / hash_grid.cell_size;
-        let y = p.pos.y() as u32 / hash_grid.cell_size;
+        let x = p.pos.x as u32 / hash_grid.cell_size;
+        let y = p.pos.y as u32 / hash_grid.cell_size;
 
         let n_pos = (x as i32, y as i32);
         for pos in [
@@ -269,11 +264,12 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-        .iter()
+            .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
-                let d = self.get_distance_of_particle_to_pos(particles_map, neighbour_id, center_pos);
+                let d =
+                    self.get_distance_of_particle_to_pos(particles_map, neighbour_id, center_pos);
                 if d < influence_distance {
                     id_list.push(neighbour_id);
                 }
@@ -287,8 +283,8 @@ impl ParticleWorld {
         p: &Particle,
         particle_list: &mut Vec<u32>,
     ) {
-        let x = p.pos.x() as u32 / hash_grid.cell_size;
-        let y = p.pos.y() as u32 / hash_grid.cell_size;
+        let x = p.pos.x as u32 / hash_grid.cell_size;
+        let y = p.pos.y  as u32 / hash_grid.cell_size;
 
         let n_pos = (x as i32, y as i32);
         for pos in [
@@ -302,7 +298,7 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-        .iter()
+            .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
@@ -311,38 +307,22 @@ impl ParticleWorld {
         }
     }
 
-    fn get_distance_of_particle_to_pos(&self, particles_map: &HashMap<u32, Particle>, id: u32, pos: &MyVector) -> f32 {
+    fn get_distance_of_particle_to_pos(
+        &self,
+        particles_map: &HashMap<u32, Particle>,
+        id: u32,
+        pos: &Vec2,
+    ) -> f32 {
         let p = particles_map.get(&id).unwrap();
-        (p.pos - *pos).magnitude()
+        (p.pos - *pos).length()
     }
 
-    // fn get_density_of_particles(&self, p1: &Particle, p2: &Particle) -> (f32, f32) {
-    //     let d = (p1.pos - p2.pos).magnitude();
-    //     let q = d / self.interaction_radius;
-    //     if q < 1.0 {
-    //         return ((1.0 - q).powi(2), (1.0 - q).powi(3));
-    //     }
-    //     (0.0, 0.0)
-    // }
-
-    // fn get_displacement_of_particles(
-    //     &self,
-    //     dt: f32,
-    //     d: MyVector,
-    //     pressure: f32,
-    //     pressure_near: f32,
-    // ) -> MyVector {
-    //     let q = d.magnitude() / self.interaction_radius;
-    //     if q < 1.0 {
-    //         d.normalize();
-    //         let displacement =
-    //             dt.powi(2) * (pressure * (1.0 - q) + pressure_near * (1.0 - q).powi(2));
-    //         return d * displacement;
-    //     }
-    //     MyVector::zero()
-    // }
-
-    pub fn double_density_relaxiation(&self, particles_map: &mut HashMap<u32, Particle>, hash_grid: &ParticleHashGrid, dt: f32) {
+    pub fn double_density_relaxiation(
+        &self,
+        particles_map: &mut HashMap<u32, Particle>,
+        hash_grid: &ParticleHashGrid,
+        dt: f32,
+    ) {
         let id_list = particles_map.keys().map(|k| *k).collect::<Vec<_>>();
 
         for id in id_list.iter() {
@@ -360,7 +340,7 @@ impl ParticleWorld {
                 let neighbour = particles_map.get(neighbour_id).unwrap();
 
                 let d = pos - neighbour.pos;
-                let q = d.magnitude() / self.interaction_radius;
+                let q = d.length() / self.interaction_radius;
                 if q < 1.0 {
                     density += (1.0 - q).powi(2);
                     density_near += (1.0 - q).powi(3);
@@ -369,7 +349,7 @@ impl ParticleWorld {
 
             let pressure = self.k * (density - self.rest_density);
             let pressure_near = self.k_near * density_near;
-            let mut this_displacement = MyVector::zero();
+            let mut this_displacement = Vec2::ZERO;
 
             for neighbour_id in neighbours.iter() {
                 if neighbour_id == id {
@@ -377,17 +357,21 @@ impl ParticleWorld {
                 }
                 let neighbour = particles_map.get(neighbour_id).unwrap();
                 let mut d = neighbour.pos - pos;
-                let q = d.magnitude() / self.interaction_radius;
+                let q = d.length() / self.interaction_radius;
                 if q < 1.0 {
                     d = d.normalize();
                     let displacement_term =
                         dt.powi(2) * (pressure * (1.0 - q) + pressure_near * (1.0 - q).powi(2));
                     let displacement = d * displacement_term;
-                    particles_map.entry(*neighbour_id).and_modify(|p| p.pos = p.pos + (displacement * 0.5));
+                    particles_map
+                        .entry(*neighbour_id)
+                        .and_modify(|p| p.pos = p.pos + (displacement * 0.5));
                     this_displacement = this_displacement - (displacement * 0.5);
                 }
             }
-            particles_map.entry(*id).and_modify(|p| p.pos = p.pos + this_displacement);
+            particles_map
+                .entry(*id)
+                .and_modify(|p| p.pos = p.pos + this_displacement);
         }
     }
 }

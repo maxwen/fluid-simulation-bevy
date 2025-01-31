@@ -114,7 +114,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                resolution: WindowResolution::new(400., 200.).with_scale_factor_override(1.0),
+                resolution: WindowResolution::new(200., 200.).with_scale_factor_override(1.0),
                 ..default()
             }),
             ..default()
@@ -124,15 +124,15 @@ fn main() {
         .run();
 }
 
-fn particle_to_world(window: &Window, camera: &Transform, position: (f32, f32)) -> Vec2 {
+fn particle_to_world(window: &Window, camera: &Transform, position: Vec2) -> Vec2 {
     let center = camera.translation.truncate();
     let half_width = (window.width() / 2.0) * camera.scale.x;
     let half_height = (window.height() / 2.0) * camera.scale.y;
     let left = center.x - half_width;
     let top = center.y + half_height;
     Vec2::new(
-        left + position.0 * camera.scale.x,
-        top - position.1 * camera.scale.y,
+        left + position.x * camera.scale.x,
+        top - position.y * camera.scale.y,
     )
 }
 
@@ -147,7 +147,7 @@ fn setup(
     let window = q_window.single();
     commands.spawn(SimulationGrid::new());
 
-    let mut particle_amount = 100;
+    let mut particle_amount = 500;
     let mut particles = SimulationParticles::new();
     let world  = SimulationWorld::new(window.width(), window.height());
     world.world.create_particles(&mut particles.particles_map, particle_amount);
@@ -157,7 +157,7 @@ fn setup(
 
     for id in 0..particle_amount {
         commands.spawn((
-            Mesh2d(meshes.add(ParticleMesh::new(id, 2.0).mesh())),
+            Mesh2d(meshes.add(ParticleMesh::new(id, 3.0).mesh())),
             MeshMaterial2d(materials.add(Color::srgb_u8(255, 0, 0))),
             Transform::from_xyz(0.0, 0.0, 0.0),
             ParticleState { id },
@@ -195,7 +195,7 @@ fn update_particles(
 
     for (mut transform, p) in &mut ui_particles {
         let simulation_particle = simulation_particles.particles_map.get(&p.id).unwrap();
-        let pos = particle_to_world(window, t, (simulation_particle.pos.x(), simulation_particle.pos.y()));
+        let pos = particle_to_world(window, t, simulation_particle.pos);
 
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
