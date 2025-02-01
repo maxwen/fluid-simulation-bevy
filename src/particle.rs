@@ -124,7 +124,6 @@ pub struct SimulationProperties {
     pub interaction_radius: f32,
     pub sigma: f32,
     pub beta: f32,
-    pub velocity_damping: f32,
 }
 
 impl SimulationProperties {
@@ -133,11 +132,10 @@ impl SimulationProperties {
             gravity: Vec2::new(0.0, 1.0),
             rest_density: 20.0,
             k_near: 4.0,
-            k: 0.05,
+            k: 0.03,
             interaction_radius: 20.0,
             sigma: 0.0,
-            beta: 0.02,
-            velocity_damping: 1.0,
+            beta: 0.03,
         }
     }
 }
@@ -220,7 +218,7 @@ impl ParticleWorld {
 
     pub fn predict_positions(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(_id, p)| {
-            let pos_delta = p.velocity * dt * self.properties.velocity_damping;
+            let pos_delta = p.velocity * dt;
             p.update_position(p.pos + pos_delta);
         });
     }
@@ -244,14 +242,14 @@ impl ParticleWorld {
             if p.get_border_x_min() <= 0.0 {
                 p.pos.x = p.radius;
                 p.update_position(p.pos);
-            } else if p.get_border_x_max() >= self.width as f32 {
+            } else if p.get_border_x_max() >= self.width {
                 p.pos.x = (self.width - 1.0) - p.radius;
                 p.update_position(p.pos);
             }
             if p.get_border_y_min() <= 0.0 {
                 p.pos.y = p.radius;
                 p.update_position(p.pos);
-            } else if p.get_border_y_max() >= self.height as f32 {
+            } else if p.get_border_y_max() >= self.height {
                 p.pos.y = (self.height - 1.0) - p.radius;
                 p.update_position(p.pos);
             }

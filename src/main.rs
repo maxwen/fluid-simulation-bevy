@@ -6,6 +6,8 @@ use bevy::window::{PrimaryWindow, WindowResized, WindowResolution};
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
 use fluid_simulation_bevy::particle::{Particle, ParticleHashGrid, ParticleWorld};
 use std::collections::HashMap;
+use bevy::input::common_conditions::input_toggle_active;
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 const PARTICLE_AMOUNT: f32 = 2000.0;
 const PARTICLE_RADIUS: f32 = 4.0;
@@ -87,8 +89,19 @@ fn main() {
         }))
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, update_simulation)
-        .add_systems(Update, (update_particles, on_mouse_event, on_keyboard_event, on_resize_event))
+        .add_systems(
+            Update,
+            (
+                update_particles,
+                on_mouse_event,
+                on_keyboard_event,
+                on_resize_event,
+            ),
+        )
         .insert_resource(Time::<Fixed>::from_seconds(0.03125))
+        .add_plugins(
+            WorldInspectorPlugin::default().run_if(input_toggle_active(false, KeyCode::KeyI)),
+        )
         .run();
 }
 
