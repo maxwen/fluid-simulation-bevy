@@ -1,7 +1,7 @@
 use bevy::prelude::Vec2;
 use rand::Rng;
-use std::cmp::min;
 use std::collections::HashMap;
+use std::vec::Vec;
 
 const MIN_PARTICLE_SPEED: f32 = -2.0;
 const MAX_PARTICLE_SPEED: f32 = 2.0;
@@ -13,7 +13,7 @@ const PRIME2: u64 = 7528850467;
 pub struct Particle {
     pub pos: Vec2,
     previous_pos: Vec2,
-    velocity: Vec2,
+    pub velocity: Vec2,
     pub radius: f32,
     id: u32,
 }
@@ -122,12 +122,12 @@ pub struct ParticleWorld {
     k_near: f32,
     k: f32,
     interaction_radius: f32,
-    width: u32,
-    height: u32,
+    width: f32,
+    height: f32,
 }
 
 impl ParticleWorld {
-    pub fn new(width: u32, height: u32) -> Self {
+    pub fn new(width: f32, height: f32) -> Self {
         ParticleWorld {
             velocity_damping: 1.0,
             collision_damping: 1.0,
@@ -144,21 +144,21 @@ impl ParticleWorld {
     pub fn create_particles(
         &self,
         particles_map: &mut HashMap<u32, Particle>,
-        amount: u32,
+        amount: f32,
         radius: f32,
     ) {
-        let x_particles = amount.isqrt();
+        let x_particles = amount.sqrt();
         let y_particles = x_particles;
 
-        let mut x_start = self.width / 2 - x_particles * radius as u32 / 2;
-        let mut y_start = 0;
+        let mut x_start = self.width / 2.0 - x_particles * radius / 2.0;
+        let mut y_start = 0.0;
         let mut id = 0;
         let particle_spacing = radius;
-        for _ in 0..x_particles {
-            for _ in 0..y_particles {
+        for _ in 0..x_particles as usize {
+            for _ in 0..y_particles as usize {
                 let p = Particle {
-                    pos: Vec2::new(x_start as f32, y_start as f32),
-                    previous_pos: Vec2::new(x_start as f32, y_start as f32),
+                    pos: Vec2::new(x_start, y_start),
+                    previous_pos: Vec2::new(x_start, y_start),
                     // velocity: self.get_random_speed() * 10.0,
                     velocity: Vec2::ZERO,
                     radius,
@@ -166,18 +166,38 @@ impl ParticleWorld {
                 };
                 particles_map.insert(id, p);
                 id += 1;
-                x_start = min(
-                    x_start + radius as u32 + particle_spacing as u32,
-                    self.width,
-                );
+                x_start = f32::min(x_start + radius + particle_spacing, self.width);
             }
-            x_start = self.width / 2 - x_particles * radius as u32 / 2;
-            y_start = min(
-                y_start + radius as u32 + particle_spacing as u32,
-                self.height,
-            );
+            x_start = self.width / 2.0 - x_particles * radius / 2.0;
+            y_start = f32::min(y_start + radius + particle_spacing, self.height);
         }
     }
+
+    pub fn reset_particles(&self, particles_map: &mut HashMap<u32, Particle>, radius: f32) {
+        let x_particles = (particles_map.len() as f32).sqrt();
+        let y_particles = x_particles;
+
+        let mut x_start = self.width / 2.0 - x_particles * radius / 2.0;
+        let mut y_start = 0.0;
+
+        let particle_spacing = radius;
+        let mut p_id = 0;
+        for _ in 0..x_particles as usize {
+            for _ in 0..y_particles as usize {
+                particles_map.entry(p_id).and_modify(|p| {
+                    p.pos = Vec2::new(x_start, y_start);
+                    p.previous_pos = Vec2::new(x_start, y_start);
+                    p.velocity = Vec2::ZERO;
+                });
+
+                p_id += 1;
+                x_start = f32::min(x_start + radius + particle_spacing, self.width);
+            }
+            x_start = self.width / 2.0 - x_particles * radius / 2.0;
+            y_start = f32::min(y_start + radius + particle_spacing, self.height);
+        }
+    }
+
     pub fn predict_positions(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(id, p)| {
             let pos_delta = p.velocity * dt * self.velocity_damping;
@@ -204,14 +224,14 @@ impl ParticleWorld {
                 p.pos.x = p.radius;
                 p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
             } else if p.get_border_x_max() >= self.width as f32 {
-                p.pos.x = (self.width - 1) as f32 - p.radius;
+                p.pos.x = (self.width - 1.0) - p.radius;
                 p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
             }
             if p.get_border_y_min() <= 0.0 {
                 p.pos.y = p.radius;
                 p.velocity.y = p.velocity.y * -1.0 * self.collision_damping;
             } else if p.get_border_y_max() >= self.height as f32 {
-                p.pos.y = (self.height - 1) as f32 - p.radius;
+                p.pos.y = (self.height - 1.0) - p.radius;
                 p.velocity.y = p.velocity.y * -1.0 * self.collision_damping;
             }
         })
@@ -224,14 +244,14 @@ impl ParticleWorld {
                 p.pos.x = p.radius;
                 p.update_position(p.pos);
             } else if p.get_border_x_max() >= self.width as f32 {
-                p.pos.x = (self.width - 1) as f32 - p.radius;
+                p.pos.x = (self.width - 1.0) - p.radius;
                 p.update_position(p.pos);
             }
             if p.get_border_y_min() <= 0.0 {
                 p.pos.y = p.radius;
                 p.update_position(p.pos);
             } else if p.get_border_y_max() >= self.height as f32 {
-                p.pos.y = (self.height - 1) as f32 - p.radius;
+                p.pos.y = (self.height - 1.0) - p.radius;
                 p.update_position(p.pos);
             }
         })
@@ -327,20 +347,19 @@ impl ParticleWorld {
         hash_grid: &ParticleHashGrid,
         dt: f32,
     ) {
-        let id_list = particles_map.keys().map(|k| *k).collect::<Vec<_>>();
         let dt_pow = dt.powi(2);
 
-        for id in id_list.iter() {
+        for id in 0..particles_map.len() as u32 {
             let mut density = 0.0;
             let mut density_near = 0.0;
             let mut neighbours = vec![];
-            let p = particles_map.get(id).unwrap();
+            let p = particles_map.get(&id).unwrap();
             let pos = p.pos;
             let mut neighbours_filtered: HashMap<u32, (Vec2, f32)> = HashMap::new();
 
             self.get_neighbour_cell_particles(hash_grid, &p, &mut neighbours);
             for neighbour_id in neighbours.iter() {
-                if neighbour_id == id {
+                if *neighbour_id == id {
                     continue;
                 }
                 let neighbour = particles_map.get(neighbour_id).unwrap();
@@ -370,7 +389,7 @@ impl ParticleWorld {
                 this_displacement = this_displacement - (displacement * 0.5);
             }
             particles_map
-                .entry(*id)
+                .entry(id)
                 .and_modify(|p| p.pos = p.pos + this_displacement);
         }
     }

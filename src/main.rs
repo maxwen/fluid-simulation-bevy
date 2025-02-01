@@ -1,74 +1,23 @@
 //! Renders a 2D scene containing a single, moving sprite.
 
 use bevy::input::mouse::MouseButtonInput;
-use bevy::math::bounding::{Aabb2d, Bounded2d, BoundingCircle};
-use bevy::prelude::*;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized, WindowResolution};
-use bevyPlayground::particle::{Particle, ParticleHashGrid, ParticleWorld};
+use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
+use fluid_simulation_bevy::particle::{Particle, ParticleHashGrid, ParticleWorld};
 use std::collections::HashMap;
 
-#[derive(Copy, Clone, Component)]
-struct ParticleMesh {
-    circle: Circle,
-    radius: f32,
-    id: u32,
-}
+const PARTICLE_AMOUNT: f32 = 1000.0;
+const PARTICLE_RADIUS: f32 = 4.0;
 
 #[derive(Copy, Clone, Component)]
 struct ParticleState {
     id: u32,
 }
 
-impl Primitive2d for ParticleMesh {}
-
-impl ParticleMesh {
-    const fn new(id: u32, radius: f32) -> Self {
-        ParticleMesh {
-            circle: Circle::new(radius),
-            radius,
-            id,
-        }
-    }
-}
-
-impl Measured2d for ParticleMesh {
-    fn perimeter(&self) -> f32 {
-        self.circle.perimeter()
-    }
-
-    fn area(&self) -> f32 {
-        self.circle.area()
-    }
-}
-
-impl Bounded2d for ParticleMesh {
-    fn aabb_2d(&self, isometry: impl Into<Isometry2d>) -> Aabb2d {
-        self.circle.aabb_2d(isometry)
-    }
-
-    fn bounding_circle(&self, isometry: impl Into<Isometry2d>) -> BoundingCircle {
-        self.circle.bounding_circle(isometry)
-    }
-}
-
-impl Meshable for ParticleMesh {
-    type Output = ParticleMeshBuilder;
-
-    fn mesh(&self) -> Self::Output {
-        Self::Output { particle: *self }
-    }
-}
-
-struct ParticleMeshBuilder {
-    particle: ParticleMesh,
-}
-
-impl MeshBuilder for ParticleMeshBuilder {
-    // This is where you should build the actual mesh.
-    fn build(&self) -> Mesh {
-        self.particle.circle.mesh().build()
-    }
+#[derive(Component)]
+struct ParticleProperties {
+    color_grad: LinearGradient,
 }
 
 #[derive(Component)]
@@ -96,7 +45,7 @@ impl SimulationGrid {
 
 impl SimulationWorld {
     fn new(width: f32, height: f32) -> Self {
-        let world = ParticleWorld::new(width as u32, height as u32);
+        let world = ParticleWorld::new(width, height);
         SimulationWorld { world }
     }
 }
@@ -106,6 +55,25 @@ impl SimulationParticles {
         SimulationParticles {
             particles_map: HashMap::new(),
         }
+    }
+}
+
+impl ParticleProperties {
+    fn new() -> Self {
+        let grad = GradientBuilder::new()
+            .colors(&[
+                GradColor::from((0.0, 0.0, 1.0)),
+                GradColor::from((1.0, 0.0, 0.0)),
+            ])
+            .build::<LinearGradient>()
+            .unwrap();
+        ParticleProperties { color_grad: grad }
+    }
+
+    fn get_color_for_velocity(&self, velocity: f32) -> Color {
+        let mapped = (1.0 / 20.0) * (f32::min(velocity, 20.0) - 0.0);
+        let rgba = self.color_grad.at(mapped).to_rgba8();
+        Color::srgba_u8(rgba[0], rgba[1], rgba[2], rgba[3])
     }
 }
 
@@ -121,7 +89,12 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             FixedUpdate,
-            (update_particles, on_mouse_event, on_keyboard_event, on_resize_event),
+            (
+                (update_simulation, update_particles).chain(),
+                on_mouse_event,
+                on_keyboard_event,
+                on_resize_event,
+            ),
         )
         .run();
 }
@@ -149,23 +122,21 @@ fn setup(
     let window = q_window.single();
     commands.spawn(SimulationGrid::new());
 
-    let mut particle_amount = 1000;
-    let particle_radius = 4.0;
-
     let mut particles = SimulationParticles::new();
     let world = SimulationWorld::new(window.width(), window.height());
     world.world.create_particles(
         &mut particles.particles_map,
-        particle_amount,
-        particle_radius,
+        PARTICLE_AMOUNT,
+        PARTICLE_RADIUS,
     );
-    particle_amount = particles.particles_map.len() as u32;
+    let real_particle_amount = particles.particles_map.len() as f32;
     commands.spawn(particles);
     commands.spawn(world);
+    commands.spawn(ParticleProperties::new());
 
-    for id in 0..particle_amount {
+    for id in 0..real_particle_amount as u32 {
         commands.spawn((
-            Mesh2d(meshes.add(ParticleMesh::new(id, particle_radius).mesh())),
+            Mesh2d(meshes.add(Circle::new(PARTICLE_RADIUS).mesh())),
             MeshMaterial2d(materials.add(Color::srgb_u8(0, 0, 255))),
             Transform::from_xyz(0.0, 0.0, 0.0),
             ParticleState { id },
@@ -173,22 +144,19 @@ fn setup(
     }
 }
 
-fn on_resize_event(
-    mut resize_reader: EventReader<WindowResized>,
-) {
+fn on_resize_event(mut resize_reader: EventReader<WindowResized>) {
     for e in resize_reader.read() {
         // When resolution is being changed
         println!("{:.1} x {:.1}", e.width, e.height);
     }
 }
 
-
 fn on_mouse_event(
     q_windows: Query<&Window, With<PrimaryWindow>>,
     mut mousebtn_evr: EventReader<MouseButtonInput>,
-    grid: Query<(&SimulationGrid)>,
-    world: Query<(&SimulationWorld)>,
-    simulation_particles: Query<(&SimulationParticles)>,
+    grid: Query<&SimulationGrid>,
+    world: Query<&SimulationWorld>,
+    simulation_particles: Query<&SimulationParticles>,
 ) {
     use bevy::input::ButtonState;
 
@@ -220,34 +188,68 @@ fn on_mouse_event(
                     }
                 }
             }
-            ButtonState::Released => {
-            }
+            ButtonState::Released => {}
         }
     }
 }
 
-fn on_keyboard_event(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit>) {
+fn on_keyboard_event(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut exit: EventWriter<AppExit>,
+    mut world: Query<&mut SimulationWorld>,
+    mut simulation_particles: Query<&mut SimulationParticles>,
+) {
     if keys.just_pressed(KeyCode::Escape) {
         exit.send(AppExit::Success);
     }
     if keys.just_released(KeyCode::KeyQ) {
         exit.send(AppExit::Success);
     }
+    if keys.just_released(KeyCode::KeyR) {
+        let simulation_world = world.get_single().unwrap();
+        let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
+        simulation_world.world.reset_particles(&mut simulation_particles.particles_map, PARTICLE_RADIUS);
+    }
 }
 
 fn update_particles(
-    fixed_time: Res<Time<Fixed>>,
+    _fixed_time: Res<Time<Fixed>>,
     q_window: Query<&Window, With<PrimaryWindow>>,
-    mut camera: Query<&Transform, (With<Camera>, Without<ParticleState>)>,
-    mut ui_particles: Query<(&mut Transform, &mut ParticleState)>,
-    mut world: Query<(&mut SimulationWorld)>,
-    mut grid: Query<(&mut SimulationGrid)>,
-    mut simulation_particles: Query<(&mut SimulationParticles)>,
+    camera: Query<&Transform, (With<Camera>, Without<ParticleState>)>,
+    mut ui_particles: Query<(
+        &mut Transform,
+        &ParticleState,
+        &mut MeshMaterial2d<ColorMaterial>,
+    )>,
+    simulation_particles: Query<&SimulationParticles>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    particle_properties: Query<&ParticleProperties>,
 ) {
     let window = q_window.single();
     let t = camera.get_single().unwrap();
+    let particle_properties = particle_properties.get_single().unwrap();
+    let simulation_particles = simulation_particles.get_single().unwrap();
 
-    let mut simulation_world = world.get_single_mut().unwrap();
+    for (mut transform, p, color_handle) in &mut ui_particles {
+        let simulation_particle = simulation_particles.particles_map.get(&p.id).unwrap();
+
+        let material = materials.get_mut(&*color_handle).unwrap();
+        let velocity = simulation_particle.velocity;
+        material.color = particle_properties.get_color_for_velocity(velocity.length());
+
+        let pos = particle_to_world(window, t, simulation_particle.pos);
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
+    }
+}
+
+fn update_simulation(
+    _fixed_time: Res<Time<Fixed>>,
+    mut world: Query<&mut SimulationWorld>,
+    mut grid: Query<&mut SimulationGrid>,
+    mut simulation_particles: Query<&mut SimulationParticles>,
+) {
+    let simulation_world = world.get_single_mut().unwrap();
     let mut simulation_grid = grid.get_single_mut().unwrap();
     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
 
@@ -272,12 +274,4 @@ fn update_particles(
     simulation_world
         .world
         .compute_velocity(&mut simulation_particles.particles_map, dt);
-
-    for (mut transform, p) in &mut ui_particles {
-        let simulation_particle = simulation_particles.particles_map.get(&p.id).unwrap();
-        let pos = particle_to_world(window, t, simulation_particle.pos);
-
-        transform.translation.x = pos.x;
-        transform.translation.y = pos.y;
-    }
 }
