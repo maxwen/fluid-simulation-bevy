@@ -4,12 +4,10 @@ use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized, WindowResolution};
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
-use fluid_simulation_bevy::particle::{
-    Particle, ParticleHashGrid, ParticleWorld,
-};
+use fluid_simulation_bevy::particle::{Particle, ParticleHashGrid, ParticleWorld};
 use std::collections::HashMap;
 
-const PARTICLE_AMOUNT: f32 = 1000.0;
+const PARTICLE_AMOUNT: f32 = 2000.0;
 const PARTICLE_RADIUS: f32 = 4.0;
 
 #[derive(Copy, Clone, Component)]
@@ -82,21 +80,15 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                resolution: WindowResolution::new(640., 480.).with_scale_factor_override(1.0),
+                resolution: WindowResolution::new(800., 600.).with_scale_factor_override(1.0),
                 ..default()
             }),
             ..default()
         }))
         .add_systems(Startup, setup)
-        .add_systems(
-            FixedUpdate,
-            (
-                (update_simulation, update_particles).chain(),
-                on_mouse_event,
-                on_keyboard_event,
-                on_resize_event,
-            ),
-        )
+        .add_systems(FixedUpdate, update_simulation)
+        .add_systems(Update, (update_particles, on_mouse_event, on_keyboard_event, on_resize_event))
+        .insert_resource(Time::<Fixed>::from_seconds(0.03125))
         .run();
 }
 
@@ -224,7 +216,7 @@ fn on_keyboard_event(
 }
 
 fn update_particles(
-    _fixed_time: Res<Time<Fixed>>,
+    _time: Res<Time>,
     q_window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<&Transform, (With<Camera>, Without<ParticleState>)>,
     mut ui_particles: Query<(
@@ -264,7 +256,7 @@ fn update_simulation(
     let mut simulation_grid = grid.get_single_mut().unwrap();
     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
 
-    let dt = 0.25; //fixed_time.delta_secs();
+    let dt = 0.3; //fixed_time.delta_secs();
     simulation_grid
         .particle_grid
         .neighbour_search(&simulation_particles.particles_map);
