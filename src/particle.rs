@@ -15,7 +15,6 @@ pub struct Particle {
     previous_pos: Vec2,
     velocity: Vec2,
     pub radius: f32,
-    pub color: [u8; 4],
     id: u32,
 }
 
@@ -43,10 +42,6 @@ impl Particle {
     fn get_border_y_max(&self) -> f32 {
         self.pos.y + self.radius
     }
-
-    fn set_color(&mut self, color: [u8; 4]) {
-        self.color = color
-    }
 }
 pub struct ParticleHashGrid {
     cell_size: u32,
@@ -57,7 +52,7 @@ pub struct ParticleHashGrid {
 impl ParticleHashGrid {
     pub fn new() -> Self {
         ParticleHashGrid {
-            cell_size: 25,
+            cell_size: 20,
             hash_grid_size: 10000000,
             hash_grid: HashMap::new(),
         }
@@ -136,24 +131,29 @@ impl ParticleWorld {
         ParticleWorld {
             velocity_damping: 1.0,
             collision_damping: 1.0,
-            gravity: Vec2::new(0.0, 10.0),
-            rest_density: 30.0,
-            k_near: 3.0,
+            gravity: Vec2::new(0.0, 1.0),
+            rest_density: 20.0,
+            k_near: 4.0,
             k: 0.05,
-            interaction_radius: 10.0,
+            interaction_radius: 20.0,
             width,
             height,
         }
     }
 
-    pub fn create_particles(&self, particles_map: &mut HashMap<u32, Particle>, amount: u32) {
+    pub fn create_particles(
+        &self,
+        particles_map: &mut HashMap<u32, Particle>,
+        amount: u32,
+        radius: f32,
+    ) {
         let x_particles = amount.isqrt();
         let y_particles = x_particles;
-        let radius = 2;
 
-        let mut x_start = self.width / 2 - x_particles * radius / 2;
-        let mut y_start = self.height / 2 - y_particles * radius / 2;
+        let mut x_start = self.width / 2 - x_particles * radius as u32 / 2;
+        let mut y_start = 0;
         let mut id = 0;
+        let particle_spacing = radius;
         for _ in 0..x_particles {
             for _ in 0..y_particles {
                 let p = Particle {
@@ -161,16 +161,21 @@ impl ParticleWorld {
                     previous_pos: Vec2::new(x_start as f32, y_start as f32),
                     // velocity: self.get_random_speed() * 10.0,
                     velocity: Vec2::ZERO,
-                    radius: radius as f32,
-                    color: [0xac, 0x00, 0xe6, 0xff],
+                    radius,
                     id,
                 };
                 particles_map.insert(id, p);
                 id += 1;
-                x_start = min(x_start + radius, self.width);
+                x_start = min(
+                    x_start + radius as u32 + particle_spacing as u32,
+                    self.width,
+                );
             }
-            x_start = self.width / 2 - x_particles * radius / 2;
-            y_start = min(y_start + radius, self.height);
+            x_start = self.width / 2 - x_particles * radius as u32 / 2;
+            y_start = min(
+                y_start + radius as u32 + particle_spacing as u32,
+                self.height,
+            );
         }
     }
     pub fn predict_positions(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
@@ -246,7 +251,6 @@ impl ParticleWorld {
         id: u32,
         id_list: &mut Vec<u32>,
         center_pos: &Vec2,
-        influence_distance: f32,
     ) {
         let p = particles_map.get(&id).unwrap();
         let x = p.pos.x as u32 / hash_grid.cell_size;
@@ -264,27 +268,27 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-            .iter()
+        .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
                 let d =
                     self.get_distance_of_particle_to_pos(particles_map, neighbour_id, center_pos);
-                if d < influence_distance {
+                if d < self.interaction_radius {
                     id_list.push(neighbour_id);
                 }
             }
         }
     }
 
-    fn get_neighbour_cell_particles<'a>(
+    fn get_neighbour_cell_particles(
         &self,
         hash_grid: &ParticleHashGrid,
         p: &Particle,
         particle_list: &mut Vec<u32>,
     ) {
         let x = p.pos.x as u32 / hash_grid.cell_size;
-        let y = p.pos.y  as u32 / hash_grid.cell_size;
+        let y = p.pos.y as u32 / hash_grid.cell_size;
 
         let n_pos = (x as i32, y as i32);
         for pos in [
@@ -298,7 +302,7 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-            .iter()
+        .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
@@ -324,6 +328,7 @@ impl ParticleWorld {
         dt: f32,
     ) {
         let id_list = particles_map.keys().map(|k| *k).collect::<Vec<_>>();
+        let dt_pow = dt.powi(2);
 
         for id in id_list.iter() {
             let mut density = 0.0;
@@ -331,6 +336,7 @@ impl ParticleWorld {
             let mut neighbours = vec![];
             let p = particles_map.get(id).unwrap();
             let pos = p.pos;
+            let mut neighbours_filtered: HashMap<u32, (Vec2, f32)> = HashMap::new();
 
             self.get_neighbour_cell_particles(hash_grid, &p, &mut neighbours);
             for neighbour_id in neighbours.iter() {
@@ -339,9 +345,11 @@ impl ParticleWorld {
                 }
                 let neighbour = particles_map.get(neighbour_id).unwrap();
 
-                let d = pos - neighbour.pos;
+                let mut d = neighbour.pos - pos;
                 let q = d.length() / self.interaction_radius;
+
                 if q < 1.0 {
+                    neighbours_filtered.insert(*neighbour_id, (d, q));
                     density += (1.0 - q).powi(2);
                     density_near += (1.0 - q).powi(3);
                 }
@@ -351,23 +359,15 @@ impl ParticleWorld {
             let pressure_near = self.k_near * density_near;
             let mut this_displacement = Vec2::ZERO;
 
-            for neighbour_id in neighbours.iter() {
-                if neighbour_id == id {
-                    continue;
-                }
-                let neighbour = particles_map.get(neighbour_id).unwrap();
-                let mut d = neighbour.pos - pos;
-                let q = d.length() / self.interaction_radius;
-                if q < 1.0 {
-                    d = d.normalize();
-                    let displacement_term =
-                        dt.powi(2) * (pressure * (1.0 - q) + pressure_near * (1.0 - q).powi(2));
-                    let displacement = d * displacement_term;
-                    particles_map
-                        .entry(*neighbour_id)
-                        .and_modify(|p| p.pos = p.pos + (displacement * 0.5));
-                    this_displacement = this_displacement - (displacement * 0.5);
-                }
+            for (neighbour_id, (d, q)) in neighbours_filtered.iter() {
+                let d = d.normalize();
+                let displacement_term =
+                    dt_pow * (pressure * (1.0 - q) + pressure_near * (1.0 - q).powi(2));
+                let displacement = d * displacement_term;
+                particles_map
+                    .entry(*neighbour_id)
+                    .and_modify(|p| p.pos = p.pos + (displacement * 0.5));
+                this_displacement = this_displacement - (displacement * 0.5);
             }
             particles_map
                 .entry(*id)

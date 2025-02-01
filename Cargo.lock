@@ -314,7 +314,6 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "rand 0.9.0",
- "rand_chacha 0.9.0",
 ]
 
 [[package]]
