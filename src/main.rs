@@ -4,7 +4,9 @@ use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized, WindowResolution};
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
-use fluid_simulation_bevy::particle::{Particle, ParticleHashGrid, ParticleWorld, SimulationProperties};
+use fluid_simulation_bevy::particle::{
+    Particle, ParticleHashGrid, ParticleWorld,
+};
 use std::collections::HashMap;
 
 const PARTICLE_AMOUNT: f32 = 1000.0;
@@ -207,13 +209,17 @@ fn on_keyboard_event(
     if keys.just_released(KeyCode::KeyR) {
         let simulation_world = world.get_single().unwrap();
         let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
-        simulation_world.world.reset_particles(&mut simulation_particles.particles_map, PARTICLE_RADIUS);
+        simulation_world
+            .world
+            .reset_particles(&mut simulation_particles.particles_map, PARTICLE_RADIUS);
     }
     if keys.just_released(KeyCode::KeyP) {
         let mut simulation_world = world.get_single_mut().unwrap();
         let mut properties = simulation_world.world.properties;
         properties.interaction_radius += 1.0;
-        simulation_world.world.change_simulation_properties(properties);
+        simulation_world
+            .world
+            .change_simulation_properties(properties);
     }
 }
 
@@ -262,6 +268,11 @@ fn update_simulation(
     simulation_grid
         .particle_grid
         .neighbour_search(&simulation_particles.particles_map);
+    simulation_world.world.viscosity(
+        &mut simulation_particles.particles_map,
+        &simulation_grid.particle_grid,
+        dt,
+    );
     simulation_world
         .world
         .apply_gravity(&mut simulation_particles.particles_map, dt);

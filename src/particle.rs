@@ -122,6 +122,9 @@ pub struct SimulationProperties {
     pub k_near: f32,
     pub k: f32,
     pub interaction_radius: f32,
+    pub sigma: f32,
+    pub beta: f32,
+    pub velocity_damping: f32,
 }
 
 impl SimulationProperties {
@@ -132,23 +135,22 @@ impl SimulationProperties {
             k_near: 4.0,
             k: 0.05,
             interaction_radius: 20.0,
+            sigma: 0.0,
+            beta: 0.02,
+            velocity_damping: 1.0,
         }
     }
 }
 
 pub struct ParticleWorld {
-    velocity_damping: f32,
-    collision_damping: f32,
     width: f32,
     height: f32,
-    pub properties: SimulationProperties
+    pub properties: SimulationProperties,
 }
 
 impl ParticleWorld {
     pub fn new(width: f32, height: f32) -> Self {
         ParticleWorld {
-            velocity_damping: 1.0,
-            collision_damping: 1.0,
             width,
             height,
             properties: SimulationProperties::new(),
@@ -218,7 +220,7 @@ impl ParticleWorld {
 
     pub fn predict_positions(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(_id, p)| {
-            let pos_delta = p.velocity * dt * self.velocity_damping;
+            let pos_delta = p.velocity * dt * self.properties.velocity_damping;
             p.update_position(p.pos + pos_delta);
         });
     }
@@ -233,25 +235,6 @@ impl ParticleWorld {
     pub fn apply_gravity(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(_id, p)| {
             p.velocity = p.velocity + (self.properties.gravity * dt);
-        })
-    }
-
-    pub fn check_boundaries_gas(&self, particles_map: &mut HashMap<u32, Particle>, _dt: f32) {
-        particles_map.iter_mut().for_each(|(_id, p)| {
-            if p.get_border_x_min() <= 0.0 {
-                p.pos.x = p.radius;
-                p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
-            } else if p.get_border_x_max() >= self.width as f32 {
-                p.pos.x = (self.width - 1.0) - p.radius;
-                p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
-            }
-            if p.get_border_y_min() <= 0.0 {
-                p.pos.y = p.radius;
-                p.velocity.y = p.velocity.y * -1.0 * self.collision_damping;
-            } else if p.get_border_y_max() >= self.height as f32 {
-                p.pos.y = (self.height - 1.0) - p.radius;
-                p.velocity.y = p.velocity.y * -1.0 * self.collision_damping;
-            }
         })
     }
 
@@ -409,6 +392,50 @@ impl ParticleWorld {
             particles_map
                 .entry(id)
                 .and_modify(|p| p.pos = p.pos + this_displacement);
+        }
+    }
+
+    pub fn viscosity(
+        &self,
+        particles_map: &mut HashMap<u32, Particle>,
+        hash_grid: &ParticleHashGrid,
+        dt: f32,
+    ) {
+        for id in 0..particles_map.len() as u32 {
+            let mut neighbours = vec![];
+            let p = particles_map.get(&id).unwrap();
+            let p_pos = p.pos;
+            let p_velocity = p.velocity;
+
+            self.get_neighbour_cell_particles(hash_grid, &p, &mut neighbours);
+            for neighbour_id in neighbours.iter() {
+                if *neighbour_id == id {
+                    continue;
+                }
+                let neighbour = particles_map.get(neighbour_id).unwrap();
+                let d = neighbour.pos - p_pos;
+                let q = d.length() / self.properties.interaction_radius;
+                let v_diff = p_velocity - neighbour.velocity;
+
+                if q < 1.0 {
+                    let d = d.normalize();
+                    let u = v_diff.dot(d);
+
+                    if u > 0.0 {
+                        let i_term = dt
+                            * (1.0 - q)
+                            * (self.properties.sigma * u + self.properties.beta * u * u);
+                        let i = d * i_term;
+
+                        particles_map
+                            .entry(id)
+                            .and_modify(|p| p.velocity = p.velocity - (i * 0.5));
+                        particles_map
+                            .entry(*neighbour_id)
+                            .and_modify(|p| p.velocity = p.velocity + (i * 0.5));
+                    }
+                }
+            }
         }
     }
 }
