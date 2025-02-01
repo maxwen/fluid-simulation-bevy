@@ -114,16 +114,34 @@ impl ParticleHashGrid {
         self.get_cell_particle_ids_from_hash(hash)
     }
 }
+
+#[derive(Debug, Copy, Clone)]
+pub struct SimulationProperties {
+    pub gravity: Vec2,
+    pub rest_density: f32,
+    pub k_near: f32,
+    pub k: f32,
+    pub interaction_radius: f32,
+}
+
+impl SimulationProperties {
+    pub fn new() -> Self {
+        SimulationProperties {
+            gravity: Vec2::new(0.0, 1.0),
+            rest_density: 20.0,
+            k_near: 4.0,
+            k: 0.05,
+            interaction_radius: 20.0,
+        }
+    }
+}
+
 pub struct ParticleWorld {
     velocity_damping: f32,
     collision_damping: f32,
-    gravity: Vec2,
-    rest_density: f32,
-    k_near: f32,
-    k: f32,
-    interaction_radius: f32,
     width: f32,
     height: f32,
+    pub properties: SimulationProperties
 }
 
 impl ParticleWorld {
@@ -131,14 +149,14 @@ impl ParticleWorld {
         ParticleWorld {
             velocity_damping: 1.0,
             collision_damping: 1.0,
-            gravity: Vec2::new(0.0, 1.0),
-            rest_density: 20.0,
-            k_near: 4.0,
-            k: 0.05,
-            interaction_radius: 20.0,
             width,
             height,
+            properties: SimulationProperties::new(),
         }
+    }
+
+    pub fn change_simulation_properties(&mut self, properties: SimulationProperties) {
+        self.properties = properties;
     }
 
     pub fn create_particles(
@@ -199,27 +217,27 @@ impl ParticleWorld {
     }
 
     pub fn predict_positions(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
-        particles_map.iter_mut().for_each(|(id, p)| {
+        particles_map.iter_mut().for_each(|(_id, p)| {
             let pos_delta = p.velocity * dt * self.velocity_damping;
             p.update_position(p.pos + pos_delta);
         });
     }
 
     pub fn compute_velocity(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
-        particles_map.iter_mut().for_each(|(id, p)| {
+        particles_map.iter_mut().for_each(|(_id, p)| {
             let velocity = (p.pos - p.previous_pos) * (1.0 / dt);
             p.velocity = velocity;
         })
     }
 
     pub fn apply_gravity(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
-        particles_map.iter_mut().for_each(|(id, p)| {
-            p.velocity = p.velocity + (self.gravity * dt);
+        particles_map.iter_mut().for_each(|(_id, p)| {
+            p.velocity = p.velocity + (self.properties.gravity * dt);
         })
     }
 
-    pub fn check_boundaries_gas(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
-        particles_map.iter_mut().for_each(|(id, p)| {
+    pub fn check_boundaries_gas(&self, particles_map: &mut HashMap<u32, Particle>, _dt: f32) {
+        particles_map.iter_mut().for_each(|(_id, p)| {
             if p.get_border_x_min() <= 0.0 {
                 p.pos.x = p.radius;
                 p.velocity.x = p.velocity.x * -1.0 * self.collision_damping;
@@ -238,8 +256,8 @@ impl ParticleWorld {
     }
 
     // no bounce
-    pub fn check_boundaries_fluid(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
-        particles_map.iter_mut().for_each(|(id, p)| {
+    pub fn check_boundaries_fluid(&self, particles_map: &mut HashMap<u32, Particle>, _dt: f32) {
+        particles_map.iter_mut().for_each(|(_id, p)| {
             if p.get_border_x_min() <= 0.0 {
                 p.pos.x = p.radius;
                 p.update_position(p.pos);
@@ -294,7 +312,7 @@ impl ParticleWorld {
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
                 let d =
                     self.get_distance_of_particle_to_pos(particles_map, neighbour_id, center_pos);
-                if d < self.interaction_radius {
+                if d < self.properties.interaction_radius {
                     id_list.push(neighbour_id);
                 }
             }
@@ -364,8 +382,8 @@ impl ParticleWorld {
                 }
                 let neighbour = particles_map.get(neighbour_id).unwrap();
 
-                let mut d = neighbour.pos - pos;
-                let q = d.length() / self.interaction_radius;
+                let d = neighbour.pos - pos;
+                let q = d.length() / self.properties.interaction_radius;
 
                 if q < 1.0 {
                     neighbours_filtered.insert(*neighbour_id, (d, q));
@@ -374,8 +392,8 @@ impl ParticleWorld {
                 }
             }
 
-            let pressure = self.k * (density - self.rest_density);
-            let pressure_near = self.k_near * density_near;
+            let pressure = self.properties.k * (density - self.properties.rest_density);
+            let pressure_near = self.properties.k_near * density_near;
             let mut this_displacement = Vec2::ZERO;
 
             for (neighbour_id, (d, q)) in neighbours_filtered.iter() {

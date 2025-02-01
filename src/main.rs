@@ -4,7 +4,7 @@ use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized, WindowResolution};
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
-use fluid_simulation_bevy::particle::{Particle, ParticleHashGrid, ParticleWorld};
+use fluid_simulation_bevy::particle::{Particle, ParticleHashGrid, ParticleWorld, SimulationProperties};
 use std::collections::HashMap;
 
 const PARTICLE_AMOUNT: f32 = 1000.0;
@@ -20,6 +20,24 @@ struct ParticleProperties {
     color_grad: LinearGradient,
 }
 
+impl ParticleProperties {
+    fn new() -> Self {
+        let grad = GradientBuilder::new()
+            .colors(&[
+                GradColor::from((0.0, 0.0, 1.0)),
+                GradColor::from((1.0, 0.0, 0.0)),
+            ])
+            .build::<LinearGradient>()
+            .unwrap();
+        ParticleProperties { color_grad: grad }
+    }
+
+    fn get_color_for_velocity(&self, velocity: f32) -> Color {
+        let mapped = (1.0 / 20.0) * (f32::min(velocity, 20.0) - 0.0);
+        let rgba = self.color_grad.at(mapped).to_rgba8();
+        Color::srgba_u8(rgba[0], rgba[1], rgba[2], rgba[3])
+    }
+}
 #[derive(Component)]
 struct SimulationGrid {
     particle_grid: ParticleHashGrid,
@@ -55,25 +73,6 @@ impl SimulationParticles {
         SimulationParticles {
             particles_map: HashMap::new(),
         }
-    }
-}
-
-impl ParticleProperties {
-    fn new() -> Self {
-        let grad = GradientBuilder::new()
-            .colors(&[
-                GradColor::from((0.0, 0.0, 1.0)),
-                GradColor::from((1.0, 0.0, 0.0)),
-            ])
-            .build::<LinearGradient>()
-            .unwrap();
-        ParticleProperties { color_grad: grad }
-    }
-
-    fn get_color_for_velocity(&self, velocity: f32) -> Color {
-        let mapped = (1.0 / 20.0) * (f32::min(velocity, 20.0) - 0.0);
-        let rgba = self.color_grad.at(mapped).to_rgba8();
-        Color::srgba_u8(rgba[0], rgba[1], rgba[2], rgba[3])
     }
 }
 
@@ -209,6 +208,12 @@ fn on_keyboard_event(
         let simulation_world = world.get_single().unwrap();
         let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
         simulation_world.world.reset_particles(&mut simulation_particles.particles_map, PARTICLE_RADIUS);
+    }
+    if keys.just_released(KeyCode::KeyP) {
+        let mut simulation_world = world.get_single_mut().unwrap();
+        let mut properties = simulation_world.world.properties;
+        properties.interaction_radius += 1.0;
+        simulation_world.world.change_simulation_properties(properties);
     }
 }
 
