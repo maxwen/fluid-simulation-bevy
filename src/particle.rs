@@ -116,7 +116,7 @@ impl ParticleHashGrid {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct SimulationProperties {
+pub struct ParticleWorldProperties {
     pub gravity: Vec2,
     pub rest_density: f32,
     pub k_near: f32,
@@ -124,11 +124,13 @@ pub struct SimulationProperties {
     pub interaction_radius: f32,
     pub sigma: f32,
     pub beta: f32,
+    pub particle_num: f32,
+    pub particle_radius: f32,
 }
 
-impl SimulationProperties {
+impl ParticleWorldProperties {
     pub fn new() -> Self {
-        SimulationProperties {
+        ParticleWorldProperties {
             gravity: Vec2::new(0.0, 1.0),
             rest_density: 20.0,
             k_near: 4.0,
@@ -136,6 +138,8 @@ impl SimulationProperties {
             interaction_radius: 20.0,
             sigma: 0.0,
             beta: 0.03,
+            particle_num: 2000.0,
+            particle_radius: 4.0,
         }
     }
 }
@@ -143,7 +147,7 @@ impl SimulationProperties {
 pub struct ParticleWorld {
     width: f32,
     height: f32,
-    pub properties: SimulationProperties,
+    pub properties: ParticleWorldProperties,
 }
 
 impl ParticleWorld {
@@ -151,27 +155,23 @@ impl ParticleWorld {
         ParticleWorld {
             width,
             height,
-            properties: SimulationProperties::new(),
+            properties: ParticleWorldProperties::new(),
         }
     }
 
-    pub fn change_simulation_properties(&mut self, properties: SimulationProperties) {
+    pub fn change_simulation_properties(&mut self, properties: ParticleWorldProperties) {
         self.properties = properties;
     }
 
-    pub fn create_particles(
-        &self,
-        particles_map: &mut HashMap<u32, Particle>,
-        amount: f32,
-        radius: f32,
-    ) {
-        let x_particles = amount.sqrt();
+    pub fn create_particles(&self, particles_map: &mut HashMap<u32, Particle>) {
+        particles_map.clear();
+        let x_particles = self.properties.particle_num.sqrt();
         let y_particles = x_particles;
 
-        let mut x_start = self.width / 2.0 - x_particles * radius / 2.0;
+        let mut x_start = self.width / 2.0 - x_particles * self.properties.particle_radius / 2.0;
         let mut y_start = 0.0;
         let mut id = 0;
-        let particle_spacing = radius;
+        let particle_spacing = self.properties.particle_radius;
         for _ in 0..x_particles as usize {
             for _ in 0..y_particles as usize {
                 let p = Particle {
@@ -179,40 +179,21 @@ impl ParticleWorld {
                     previous_pos: Vec2::new(x_start, y_start),
                     // velocity: self.get_random_speed() * 10.0,
                     velocity: Vec2::ZERO,
-                    radius,
+                    radius: self.properties.particle_radius,
                     id,
                 };
                 particles_map.insert(id, p);
                 id += 1;
-                x_start = f32::min(x_start + radius + particle_spacing, self.width);
+                x_start = f32::min(
+                    x_start + self.properties.particle_radius + particle_spacing,
+                    self.width,
+                );
             }
-            x_start = self.width / 2.0 - x_particles * radius / 2.0;
-            y_start = f32::min(y_start + radius + particle_spacing, self.height);
-        }
-    }
-
-    pub fn reset_particles(&self, particles_map: &mut HashMap<u32, Particle>, radius: f32) {
-        let x_particles = (particles_map.len() as f32).sqrt();
-        let y_particles = x_particles;
-
-        let mut x_start = self.width / 2.0 - x_particles * radius / 2.0;
-        let mut y_start = 0.0;
-
-        let particle_spacing = radius;
-        let mut p_id = 0;
-        for _ in 0..x_particles as usize {
-            for _ in 0..y_particles as usize {
-                particles_map.entry(p_id).and_modify(|p| {
-                    p.pos = Vec2::new(x_start, y_start);
-                    p.previous_pos = Vec2::new(x_start, y_start);
-                    p.velocity = Vec2::ZERO;
-                });
-
-                p_id += 1;
-                x_start = f32::min(x_start + radius + particle_spacing, self.width);
-            }
-            x_start = self.width / 2.0 - x_particles * radius / 2.0;
-            y_start = f32::min(y_start + radius + particle_spacing, self.height);
+            x_start = self.width / 2.0 - x_particles * self.properties.particle_radius / 2.0;
+            y_start = f32::min(
+                y_start + self.properties.particle_radius + particle_spacing,
+                self.height,
+            );
         }
     }
 
@@ -436,4 +417,19 @@ impl ParticleWorld {
             }
         }
     }
+}
+
+pub fn simulation_step(
+    dt: f32,
+    world: &mut ParticleWorld,
+    particle_grid: &mut ParticleHashGrid,
+    particles_map: &mut HashMap<u32, Particle>,
+) {
+    particle_grid.neighbour_search(particles_map);
+    world.viscosity(particles_map, particle_grid, dt);
+    world.apply_gravity(particles_map, dt);
+    world.predict_positions(particles_map, dt);
+    world.double_density_relaxiation(particles_map, particle_grid, dt);
+    world.check_boundaries_fluid(particles_map, dt);
+    world.compute_velocity(particles_map, dt);
 }
