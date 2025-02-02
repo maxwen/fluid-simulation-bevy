@@ -1,5 +1,6 @@
 //! Renders a 2D scene containing a single, moving sprite.
 
+use bevy::ecs::system::SystemId;
 use bevy::input::common_conditions::input_toggle_active;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
@@ -68,6 +69,9 @@ struct SimulationProperties {
     properties: ParticleWorldProperties,
 }
 
+#[derive(Resource)]
+struct CustomSystems(HashMap<String, SystemId>);
+
 impl SimulationGrid {
     fn new() -> Self {
         SimulationGrid {
@@ -97,30 +101,38 @@ impl SimulationProperties {
     }
 }
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resolution: WindowResolution::new(800., 600.).with_scale_factor_override(1.0),
-                ..default()
-            }),
+    let mut app = App::new();
+
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            resolution: WindowResolution::new(800., 600.).with_scale_factor_override(1.0),
             ..default()
-        }))
-        .add_systems(Startup, setup)
-        .add_systems(FixedUpdate, update_simulation)
-        .add_systems(
-            Update,
-            (
-                update_particles,
-                on_mouse_event,
-                on_keyboard_event,
-                on_resize_event,
-                edit_simulation_properties.run_if(input_toggle_active(false, KeyCode::KeyP)),
-            ),
-        )
-        .insert_resource(Time::<Fixed>::from_seconds(0.03125))
-        .add_plugins(EguiPlugin)
-        .insert_state(SimulationState::Running)
-        .run();
+        }),
+        ..default()
+    }))
+    .add_systems(Startup, (setup, create_particles).chain())
+    .add_systems(FixedUpdate, update_simulation)
+    .add_systems(
+        Update,
+        (
+            update_particles,
+            on_mouse_event,
+            on_keyboard_event,
+            on_resize_event,
+            edit_simulation_properties.run_if(input_toggle_active(false, KeyCode::KeyP)),
+        ),
+    )
+    .insert_resource(Time::<Fixed>::from_seconds(0.03125))
+    .add_plugins(EguiPlugin)
+    .insert_state(SimulationState::Running);
+
+    let mut custom_systems = CustomSystems(HashMap::new());
+    custom_systems
+        .0
+        .insert("reset".into(), app.register_system(recreate_particles));
+    app.insert_resource(custom_systems);
+
+    app.run();
 }
 
 fn particle_to_world(window: &Window, camera: &Transform, position: Vec2) -> Vec2 {
@@ -149,11 +161,20 @@ fn setup(
     let world = SimulationWorld::new(window.width(), window.height());
 
     world.world.create_particles(&mut particles.particles_map);
-    let real_particle_amount = particles.particles_map.len() as f32;
     commands.spawn(particles);
     commands.spawn(SimulationProperties::new(world.world.properties));
     commands.spawn(world);
     commands.spawn(ParticleProperties::new());
+}
+
+fn create_particles(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    simulation_particles: Query<&SimulationParticles>,
+) {
+    let simulation_particles = simulation_particles.get_single().unwrap();
+    let real_particle_amount = simulation_particles.particles_map.len() as f32;
 
     for id in 0..real_particle_amount as u32 {
         commands.spawn((
@@ -162,6 +183,12 @@ fn setup(
             Transform::from_xyz(0.0, 0.0, 0.0),
             ParticleState { id },
         ));
+    }
+}
+
+fn delete_particles(mut commands: Commands, mut particles: Query<(Entity, &Mesh2d)>) {
+    for (entity, _) in &mut particles {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -239,12 +266,6 @@ fn on_keyboard_event(
             }
             SimulationState::Running => next_state.set(SimulationState::Paused),
         }
-    } else if keys.just_pressed(KeyCode::KeyR) {
-        let simulation_world = simulation_world.get_single().unwrap();
-        let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
-        simulation_world
-            .world
-            .create_particles(&mut simulation_particles.particles_map);
     }
 }
 
@@ -310,10 +331,12 @@ fn update_simulation(
 }
 
 fn edit_simulation_properties(
+    mut commands: Commands,
     mut simulation_world: Query<&mut SimulationWorld>,
     mut simulation_particles: Query<&mut SimulationParticles>,
     mut simulation_properties: Query<&mut SimulationProperties>,
     mut egui_context: EguiContexts,
+    custom_systems: Res<CustomSystems>,
 ) {
     let mut simulation_world = simulation_world.get_single_mut().unwrap();
     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
@@ -339,7 +362,7 @@ fn edit_simulation_properties(
         properties.properties.particle_num = amount;
 
         ui.add(
-            Slider::new(&mut radius, 2.0..=8.0)
+            Slider::new(&mut radius, 2.0..=6.0)
                 .logarithmic(false)
                 .text("Size")
                 .step_by(1.0),
@@ -409,6 +432,32 @@ fn edit_simulation_properties(
             simulation_world
                 .world
                 .create_particles(&mut simulation_particles.particles_map);
+
+            let id = custom_systems.0["reset"];
+            commands.run_system(id);
         }
     });
+}
+
+fn recreate_particles(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    simulation_particles: Query<&SimulationParticles>,
+    mut particles: Query<(Entity, &Mesh2d)>,
+) {
+    for (entity, _) in &mut particles {
+        commands.entity(entity).despawn();
+    }
+    let simulation_particles = simulation_particles.get_single().unwrap();
+    let real_particle_amount = simulation_particles.particles_map.len() as f32;
+
+    for id in 0..real_particle_amount as u32 {
+        commands.spawn((
+            Mesh2d(meshes.add(Circle::new(1.0).mesh())),
+            MeshMaterial2d(materials.add(Color::srgb_u8(0, 0, 255))),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            ParticleState { id },
+        ));
+    }
 }
