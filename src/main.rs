@@ -10,7 +10,8 @@ use bevy_egui::EguiPlugin;
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
 use egui::Slider;
 use fluid_simulation_bevy::particle::{
-    simulation_step, Particle, ParticleHashGrid, ParticleWorld, ParticleWorldProperties,
+    simulation_step, CircleShape, Particle, ParticleHashGrid, ParticleWorld,
+    ParticleWorldProperties,
 };
 use std::collections::HashMap;
 
@@ -43,8 +44,8 @@ impl ParticleProperties {
         ParticleProperties { color_grad: grad }
     }
 
-    fn get_color_for_velocity(&self, velocity: f32) -> Color {
-        let mapped = (1.0 / 20.0) * (f32::min(velocity, 20.0) - 0.0);
+    fn get_color_for_velocity(&self, velocity_squared: f32) -> Color {
+        let mapped = (1.0 / 200.0) * (f32::min(velocity_squared, 200.0) - 0.0);
         let rgba = self.color_grad.at(mapped).to_rgba8();
         Color::srgba_u8(rgba[0], rgba[1], rgba[2], rgba[3])
     }
@@ -67,6 +68,11 @@ struct SimulationParticles {
 #[derive(Component)]
 struct SimulationProperties {
     properties: ParticleWorldProperties,
+}
+
+#[derive(Component)]
+struct SimulationActivators {
+    circle: CircleShape,
 }
 
 #[derive(Resource)]
@@ -98,6 +104,14 @@ impl SimulationParticles {
 impl SimulationProperties {
     fn new(properties: ParticleWorldProperties) -> Self {
         SimulationProperties { properties }
+    }
+}
+
+impl SimulationActivators {
+    fn new() -> Self {
+        SimulationActivators {
+            circle: CircleShape::new(Vec2::ZERO, 40.0, false)
+        }
     }
 }
 fn main() {
@@ -149,12 +163,10 @@ fn particle_to_world(window: &Window, camera: &Transform, position: Vec2) -> Vec
 
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    q_window: Query<&Window, With<PrimaryWindow>>,
+    window: Query<&Window, With<PrimaryWindow>>,
 ) {
     commands.spawn(Camera2d);
-    let window = q_window.single();
+    let window = window.single();
     commands.spawn(SimulationGrid::new());
 
     let mut particles = SimulationParticles::new();
@@ -165,6 +177,7 @@ fn setup(
     commands.spawn(SimulationProperties::new(world.world.properties));
     commands.spawn(world);
     commands.spawn(ParticleProperties::new());
+    commands.spawn(SimulationActivators::new());
 }
 
 fn create_particles(
@@ -186,6 +199,7 @@ fn create_particles(
     }
 }
 
+#[allow(dead_code)]
 fn delete_particles(mut commands: Commands, mut particles: Query<(Entity, &Mesh2d)>) {
     for (entity, _) in &mut particles {
         commands.entity(entity).despawn();
@@ -200,42 +214,25 @@ fn on_resize_event(mut resize_reader: EventReader<WindowResized>) {
 }
 
 fn on_mouse_event(
-    q_windows: Query<&Window, With<PrimaryWindow>>,
-    mut mousebtn_evr: EventReader<MouseButtonInput>,
-    grid: Query<&SimulationGrid>,
-    world: Query<&SimulationWorld>,
-    simulation_particles: Query<&SimulationParticles>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut mouse_events: EventReader<MouseButtonInput>,
+    mut simulation_activators: Query<&mut SimulationActivators>,
 ) {
     use bevy::input::ButtonState;
 
-    for ev in mousebtn_evr.read() {
+    for ev in mouse_events.read() {
         match ev.state {
             ButtonState::Pressed => {
-                // if let Some(position) = q_windows.single().cursor_position() {
-                //     let simulation_grid = grid.get_single().unwrap();
-                //     let simulation_world = world.get_single().unwrap();
-                //     let simulation_particles = simulation_particles.get_single().unwrap();
-                //
-                //     let mut id_list = simulation_grid
-                //         .particle_grid
-                //         .get_cell_particle_ids_from_pos(&position);
-                //     if id_list.len() != 0 {
-                //         // get any particle
-                //         let id = *id_list.iter().next().unwrap();
-                //         id_list.clear();
-                //         simulation_world
-                //             .world
-                //             .get_neighbour_cell_particle_ids_for_pos(
-                //                 &simulation_particles.particles_map,
-                //                 &simulation_grid.particle_grid,
-                //                 id,
-                //                 &mut id_list,
-                //                 &position,
-                //             );
-                //     }
-                // }
+                if let Some(position) = window.single().cursor_position() {
+                    let mut simulation_activators = simulation_activators.get_single_mut().unwrap();
+                    simulation_activators.circle.set_position(position);
+                    simulation_activators.circle.enable();
+                }
             }
-            ButtonState::Released => {}
+            ButtonState::Released => {
+                let mut simulation_activators = simulation_activators.get_single_mut().unwrap();
+                simulation_activators.circle.disable();
+            }
         }
     }
 }
@@ -266,6 +263,12 @@ fn on_keyboard_event(
             }
             SimulationState::Running => next_state.set(SimulationState::Paused),
         }
+    } else if keys.just_pressed(KeyCode::KeyR) {
+        let simulation_world = simulation_world.get_single().unwrap();
+        let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
+        simulation_world
+            .world
+            .create_particles(&mut simulation_particles.particles_map);
     }
 }
 
@@ -293,7 +296,7 @@ fn update_particles(
         if let Some(simulation_particle) = simulation_particles.particles_map.get(&p.id) {
             let material = materials.get_mut(&*color_handle).unwrap();
             let velocity = simulation_particle.velocity;
-            material.color = particle_properties.get_color_for_velocity(velocity.length());
+            material.color = particle_properties.get_color_for_velocity(velocity.length_squared());
 
             let pos = particle_to_world(window, t, simulation_particle.pos);
             transform.translation.x = pos.x;
@@ -310,10 +313,12 @@ fn update_simulation(
     mut world: Query<&mut SimulationWorld>,
     mut grid: Query<&mut SimulationGrid>,
     mut simulation_particles: Query<&mut SimulationParticles>,
+    simulation_activators: Query<&SimulationActivators>
 ) {
     let mut simulation_world = world.get_single_mut().unwrap();
     let mut simulation_grid = grid.get_single_mut().unwrap();
     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
+    let simulation_activators = simulation_activators.get_single().unwrap();
 
     match state.get() {
         SimulationState::Paused => return,
@@ -327,6 +332,7 @@ fn update_simulation(
         &mut simulation_world.world,
         &mut simulation_grid.particle_grid,
         &mut simulation_particles.particles_map,
+        &simulation_activators.circle
     );
 }
 
@@ -354,7 +360,7 @@ fn edit_simulation_properties(
         let mut sigma = properties.properties.sigma;
 
         ui.add(
-            Slider::new(&mut amount, 500.0..=2000.0)
+            Slider::new(&mut amount, 500.0..=3000.0)
                 .logarithmic(false)
                 .text("Amount")
                 .step_by(100.0),

@@ -144,6 +144,49 @@ impl ParticleWorldProperties {
     }
 }
 
+pub struct CircleShape {
+    pos: Vec2,
+    radius: f32,
+    active: bool,
+    dampening_factor: f32
+}
+
+impl CircleShape {
+    pub fn new(pos: Vec2, radius: f32, active: bool) -> Self {
+        CircleShape {
+            pos,
+            radius,
+            active,
+            dampening_factor: 0.5
+        }
+    }
+
+    fn get_direction_out(&self, pos: Vec2) -> Vec2 {
+        if self.active {
+            let d = pos - self.pos;
+            if d.length_squared() < self.radius * self.radius {
+                let p = (self.radius - d.length()) * self.dampening_factor;
+                let d = d.normalize();
+                return d * p;
+            }
+        }
+        Vec2::ZERO
+    }
+
+    pub fn set_position(&mut self, pos: Vec2) {
+        self.pos = pos;
+        self.active = true;
+    }
+
+    pub fn disable(&mut self) {
+        self.active = false;
+    }
+
+    pub fn enable(&mut self) {
+        self.active = true;
+    }
+}
+
 pub struct ParticleWorld {
     width: f32,
     height: f32,
@@ -237,6 +280,18 @@ impl ParticleWorld {
         })
     }
 
+    fn check_shape_collision(&self, particles_map: &mut HashMap<u32, Particle>, circle_shape: &CircleShape, _dt: f32) {
+        if circle_shape.active {
+            particles_map.iter_mut().for_each(|(_id, p)| {
+                let d = circle_shape.get_direction_out(p.pos);
+                if d != Vec2::ZERO {
+                    p.pos = p.pos + d;
+                }
+            });
+        }
+    }
+
+    #[allow(dead_code)]
     fn get_random_speed(&self) -> Vec2 {
         Vec2::new(
             rand::rng().random_range(MIN_PARTICLE_SPEED..MAX_PARTICLE_SPEED),
@@ -255,6 +310,8 @@ impl ParticleWorld {
         let p = particles_map.get(&id).unwrap();
         let x = p.pos.x as u32 / hash_grid.cell_size;
         let y = p.pos.y as u32 / hash_grid.cell_size;
+        let interaction_radius_squared =
+            self.properties.interaction_radius * self.properties.interaction_radius;
 
         let n_pos = (x as i32, y as i32);
         for pos in [
@@ -268,13 +325,13 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-        .iter()
+            .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
                 let d =
-                    self.get_distance_of_particle_to_pos(particles_map, neighbour_id, center_pos);
-                if d < self.properties.interaction_radius {
+                    self.get_distance_squared_of_particle_to_pos(particles_map, neighbour_id, center_pos);
+                if d < interaction_radius_squared {
                     id_list.push(neighbour_id);
                 }
             }
@@ -302,7 +359,7 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-        .iter()
+            .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
@@ -311,14 +368,14 @@ impl ParticleWorld {
         }
     }
 
-    fn get_distance_of_particle_to_pos(
+    fn get_distance_squared_of_particle_to_pos(
         &self,
         particles_map: &HashMap<u32, Particle>,
         id: u32,
         pos: &Vec2,
     ) -> f32 {
         let p = particles_map.get(&id).unwrap();
-        (p.pos - *pos).length()
+        (p.pos - *pos).length_squared()
     }
 
     pub fn double_density_relaxiation(
@@ -328,6 +385,8 @@ impl ParticleWorld {
         dt: f32,
     ) {
         let dt_pow = dt.powi(2);
+        let interaction_radius_squared =
+            self.properties.interaction_radius * self.properties.interaction_radius;
 
         for id in 0..particles_map.len() as u32 {
             let mut density = 0.0;
@@ -345,9 +404,10 @@ impl ParticleWorld {
                 let neighbour = particles_map.get(neighbour_id).unwrap();
 
                 let d = neighbour.pos - pos;
-                let q = d.length() / self.properties.interaction_radius;
 
-                if q < 1.0 {
+                if d.length_squared() < interaction_radius_squared {
+                    let q = d.length() / self.properties.interaction_radius;
+
                     neighbours_filtered.insert(*neighbour_id, (d, q));
                     density += (1.0 - q).powi(2);
                     density_near += (1.0 - q).powi(3);
@@ -380,6 +440,9 @@ impl ParticleWorld {
         hash_grid: &ParticleHashGrid,
         dt: f32,
     ) {
+        let interaction_radius_squared =
+            self.properties.interaction_radius * self.properties.interaction_radius;
+
         for id in 0..particles_map.len() as u32 {
             let mut neighbours = vec![];
             let p = particles_map.get(&id).unwrap();
@@ -393,14 +456,14 @@ impl ParticleWorld {
                 }
                 let neighbour = particles_map.get(neighbour_id).unwrap();
                 let d = neighbour.pos - p_pos;
-                let q = d.length() / self.properties.interaction_radius;
-                let v_diff = p_velocity - neighbour.velocity;
 
-                if q < 1.0 {
+                if d.length_squared() < interaction_radius_squared {
                     let d = d.normalize();
+                    let v_diff = p_velocity - neighbour.velocity;
                     let u = v_diff.dot(d);
 
                     if u > 0.0 {
+                        let q = d.length() / self.properties.interaction_radius;
                         let i_term = dt
                             * (1.0 - q)
                             * (self.properties.sigma * u + self.properties.beta * u * u);
@@ -417,6 +480,7 @@ impl ParticleWorld {
             }
         }
     }
+
 }
 
 pub fn simulation_step(
@@ -424,12 +488,14 @@ pub fn simulation_step(
     world: &mut ParticleWorld,
     particle_grid: &mut ParticleHashGrid,
     particles_map: &mut HashMap<u32, Particle>,
+    circle_shape: &CircleShape
 ) {
     particle_grid.neighbour_search(particles_map);
     world.viscosity(particles_map, particle_grid, dt);
     world.apply_gravity(particles_map, dt);
     world.predict_positions(particles_map, dt);
     world.double_density_relaxiation(particles_map, particle_grid, dt);
+    world.check_shape_collision(particles_map, circle_shape, dt);
     world.check_boundaries_fluid(particles_map, dt);
     world.compute_velocity(particles_map, dt);
 }
