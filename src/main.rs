@@ -219,23 +219,26 @@ fn on_mouse_event(
     mut simulation_activators: Query<&mut SimulationActivators>,
 ) {
     use bevy::input::ButtonState;
+    let mut simulation_activators = simulation_activators.get_single_mut().unwrap();
 
     for ev in mouse_events.read() {
         match ev.state {
             ButtonState::Pressed => {
-                if let Some(position) = window.single().cursor_position() {
-                    let mut simulation_activators = simulation_activators.get_single_mut().unwrap();
-                    simulation_activators.circle.set_position(position);
-                    simulation_activators.circle.enable();
-                }
+                simulation_activators.circle.enable();
             }
             ButtonState::Released => {
-                let mut simulation_activators = simulation_activators.get_single_mut().unwrap();
                 simulation_activators.circle.disable();
             }
         }
     }
+
+    if let Some(position) = window.single().cursor_position() {
+        if simulation_activators.circle.is_active() {
+            simulation_activators.circle.set_position(position);
+        }
+    }
 }
+
 
 fn on_keyboard_event(
     keys: Res<ButtonInput<KeyCode>>,
@@ -274,7 +277,7 @@ fn on_keyboard_event(
 
 fn update_particles(
     _time: Res<Time>,
-    q_window: Query<&Window, With<PrimaryWindow>>,
+    window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<&Transform, (With<Camera>, Without<ParticleState>)>,
     mut ui_particles: Query<(
         &mut Transform,
@@ -286,7 +289,7 @@ fn update_particles(
     particle_properties: Query<&ParticleProperties>,
     simulation_properties: Query<&SimulationProperties>,
 ) {
-    let window = q_window.single();
+    let window = window.single();
     let t = camera.get_single().unwrap();
     let particle_properties = particle_properties.get_single().unwrap();
     let simulation_particles = simulation_particles.get_single().unwrap();

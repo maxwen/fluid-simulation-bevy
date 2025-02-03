@@ -185,6 +185,10 @@ impl CircleShape {
     pub fn enable(&mut self) {
         self.active = true;
     }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 }
 
 pub struct ParticleWorld {
