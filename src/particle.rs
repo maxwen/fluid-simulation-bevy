@@ -1,6 +1,7 @@
 use bevy::prelude::Vec2;
 use rand::Rng;
 use std::collections::HashMap;
+use std::time::Instant;
 use std::vec::Vec;
 
 const MIN_PARTICLE_SPEED: f32 = -2.0;
@@ -148,7 +149,8 @@ pub struct CircleShape {
     pos: Vec2,
     radius: f32,
     active: bool,
-    dampening_factor: f32
+    dampening_factor: f32,
+    include: bool,
 }
 
 impl CircleShape {
@@ -157,17 +159,33 @@ impl CircleShape {
             pos,
             radius,
             active,
-            dampening_factor: 0.5
+            dampening_factor: 0.5,
+            include: false,
         }
     }
 
     fn get_direction_out(&self, pos: Vec2) -> Vec2 {
         if self.active {
+            let radius_squared = self.radius * self.radius;
             let d = pos - self.pos;
-            if d.length_squared() < self.radius * self.radius {
-                let p = (self.radius - d.length()) * self.dampening_factor;
-                let d = d.normalize();
-                return d * p;
+            if self.include {
+                let d_out = radius_squared + self.radius / 2.0;
+                let d_in = radius_squared - self.radius / 2.0;
+                if d.length_squared() < d_in {
+                    let p = self.dampening_factor;
+                    let d = d.normalize();
+                    return d * -p;
+                } else if d.length_squared() < d_out {
+                    let p = self.dampening_factor;
+                    let d = d.normalize();
+                    return d * p;
+                }
+            } else {
+                if d.length_squared() < radius_squared {
+                    let p = self.dampening_factor;
+                    let d = d.normalize();
+                    return d * p;
+                }
             }
         }
         Vec2::ZERO
@@ -182,8 +200,9 @@ impl CircleShape {
         self.active = false;
     }
 
-    pub fn enable(&mut self) {
+    pub fn enable(&mut self, include: bool) {
         self.active = true;
+        self.include = include;
     }
 
     pub fn is_active(&self) -> bool {
@@ -258,6 +277,28 @@ impl ParticleWorld {
         })
     }
 
+    pub fn compute_velocity_and_check_bounds(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
+        particles_map.iter_mut().for_each(|(_id, p)| {
+            if p.get_border_x_min() <= 0.0 {
+                p.pos.x = p.radius;
+                p.update_position(p.pos);
+            } else if p.get_border_x_max() >= self.width {
+                p.pos.x = (self.width - 1.0) - p.radius;
+                p.update_position(p.pos);
+            }
+            if p.get_border_y_min() <= 0.0 {
+                p.pos.y = p.radius;
+                p.update_position(p.pos);
+            } else if p.get_border_y_max() >= self.height {
+                p.pos.y = (self.height - 1.0) - p.radius;
+                p.update_position(p.pos);
+            }
+
+            let velocity = (p.pos - p.previous_pos) * (1.0 / dt);
+            p.velocity = velocity;
+        })
+    }
+
     pub fn apply_gravity(&self, particles_map: &mut HashMap<u32, Particle>, dt: f32) {
         particles_map.iter_mut().for_each(|(_id, p)| {
             p.velocity = p.velocity + (self.properties.gravity * dt);
@@ -284,7 +325,12 @@ impl ParticleWorld {
         })
     }
 
-    fn check_shape_collision(&self, particles_map: &mut HashMap<u32, Particle>, circle_shape: &CircleShape, _dt: f32) {
+    fn check_shape_collision(
+        &self,
+        particles_map: &mut HashMap<u32, Particle>,
+        circle_shape: &CircleShape,
+        _dt: f32,
+    ) {
         if circle_shape.active {
             particles_map.iter_mut().for_each(|(_id, p)| {
                 let d = circle_shape.get_direction_out(p.pos);
@@ -329,12 +375,15 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-            .iter()
+        .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
-                let d =
-                    self.get_distance_squared_of_particle_to_pos(particles_map, neighbour_id, center_pos);
+                let d = self.get_distance_squared_of_particle_to_pos(
+                    particles_map,
+                    neighbour_id,
+                    center_pos,
+                );
                 if d < interaction_radius_squared {
                     id_list.push(neighbour_id);
                 }
@@ -363,7 +412,7 @@ impl ParticleWorld {
             (n_pos.0 + 1, n_pos.1 - 1),
             (n_pos.0 - 1, n_pos.1 - 1),
         ]
-            .iter()
+        .iter()
         {
             let hash = hash_grid.cell_hash_from_index(pos.0, pos.1);
             for neighbour_id in hash_grid.get_cell_particle_ids_from_hash(hash) {
@@ -484,7 +533,6 @@ impl ParticleWorld {
             }
         }
     }
-
 }
 
 pub fn simulation_step(
@@ -492,7 +540,7 @@ pub fn simulation_step(
     world: &mut ParticleWorld,
     particle_grid: &mut ParticleHashGrid,
     particles_map: &mut HashMap<u32, Particle>,
-    circle_shape: &CircleShape
+    circle_shape: &CircleShape,
 ) {
     particle_grid.neighbour_search(particles_map);
     world.viscosity(particles_map, particle_grid, dt);
@@ -500,6 +548,5 @@ pub fn simulation_step(
     world.predict_positions(particles_map, dt);
     world.double_density_relaxiation(particles_map, particle_grid, dt);
     world.check_shape_collision(particles_map, circle_shape, dt);
-    world.check_boundaries_fluid(particles_map, dt);
-    world.compute_velocity(particles_map, dt);
+    world.compute_velocity_and_check_bounds(particles_map, dt);
 }

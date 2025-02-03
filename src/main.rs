@@ -37,6 +37,7 @@ impl ParticleProperties {
         let grad = GradientBuilder::new()
             .colors(&[
                 GradColor::from((0.0, 0.0, 1.0)),
+                GradColor::from((1.0, 1.0, 0.0)),
                 GradColor::from((1.0, 0.0, 0.0)),
             ])
             .build::<LinearGradient>()
@@ -217,6 +218,7 @@ fn on_mouse_event(
     window: Query<&Window, With<PrimaryWindow>>,
     mut mouse_events: EventReader<MouseButtonInput>,
     mut simulation_activators: Query<&mut SimulationActivators>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
     use bevy::input::ButtonState;
     let mut simulation_activators = simulation_activators.get_single_mut().unwrap();
@@ -224,7 +226,8 @@ fn on_mouse_event(
     for ev in mouse_events.read() {
         match ev.state {
             ButtonState::Pressed => {
-                simulation_activators.circle.enable();
+                let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+                simulation_activators.circle.enable(shift);
             }
             ButtonState::Released => {
                 simulation_activators.circle.disable();
@@ -287,14 +290,15 @@ fn update_particles(
     simulation_particles: Query<&SimulationParticles>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     particle_properties: Query<&ParticleProperties>,
-    simulation_properties: Query<&SimulationProperties>,
+    world: Query<&SimulationWorld>,
 ) {
     let window = window.single();
     let t = camera.get_single().unwrap();
     let particle_properties = particle_properties.get_single().unwrap();
     let simulation_particles = simulation_particles.get_single().unwrap();
-    let properties = simulation_properties.get_single().unwrap();
+    let simulation_world = world.get_single().unwrap();
 
+    let particle_radius = simulation_world.world.properties.particle_radius;
     for (mut transform, p, color_handle) in &mut ui_particles {
         if let Some(simulation_particle) = simulation_particles.particles_map.get(&p.id) {
             let material = materials.get_mut(&*color_handle).unwrap();
@@ -304,7 +308,7 @@ fn update_particles(
             let pos = particle_to_world(window, t, simulation_particle.pos);
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
-            transform.scale = Vec3::splat(properties.properties.particle_radius);
+            transform.scale = Vec3::splat(particle_radius);
         }
     }
 }
@@ -329,7 +333,7 @@ fn update_simulation(
         SimulationState::Stepping => next_state.set(SimulationState::Paused),
     }
 
-    let dt = 0.3; //fixed_time.delta_secs();
+    let dt = 0.5; //fixed_time.delta_secs();
     simulation_step(
         dt,
         &mut simulation_world.world,
@@ -387,7 +391,7 @@ fn edit_simulation_properties(
         }
 
         ui.add(
-            Slider::new(&mut rest_density, 10.0..=40.0)
+            Slider::new(&mut rest_density, 0.0..=40.0)
                 .logarithmic(false)
                 .text("rest density")
                 .step_by(1.0),
