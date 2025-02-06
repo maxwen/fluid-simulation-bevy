@@ -133,7 +133,7 @@ impl ParticleWorldProperties {
     pub fn new() -> Self {
         ParticleWorldProperties {
             gravity: Vec2::new(0.0, 1.0),
-            rest_density: 20.0,
+            rest_density: 30.0,
             k_near: 4.0,
             k: 0.03,
             interaction_radius: 20.0,
@@ -159,7 +159,7 @@ impl CircleShape {
             pos,
             radius,
             active,
-            dampening_factor: 0.5,
+            dampening_factor: 0.9,
             include: false,
         }
     }
@@ -182,7 +182,7 @@ impl CircleShape {
                 }
             } else {
                 if d.length_squared() < radius_squared {
-                    let p = self.dampening_factor;
+                    let p = self.dampening_factor * 2.0;
                     let d = d.normalize();
                     return d * p;
                 }
@@ -469,6 +469,7 @@ impl ParticleWorld {
 
             let pressure = self.properties.k * (density - self.properties.rest_density);
             let pressure_near = self.properties.k_near * density_near;
+
             let mut this_displacement = Vec2::ZERO;
 
             for (neighbour_id, (d, q)) in neighbours_filtered.iter() {
