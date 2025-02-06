@@ -1,8 +1,8 @@
 use bevy::prelude::Vec2;
 use rand::Rng;
 use std::collections::HashMap;
-use std::time::Instant;
 use std::vec::Vec;
+use serde::{Deserialize, Serialize};
 
 const MIN_PARTICLE_SPEED: f32 = -2.0;
 const MAX_PARTICLE_SPEED: f32 = 2.0;
@@ -116,7 +116,7 @@ impl ParticleHashGrid {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ParticleWorldProperties {
     pub gravity: Vec2,
     pub rest_density: f32,
@@ -213,15 +213,17 @@ impl CircleShape {
 pub struct ParticleWorld {
     width: f32,
     height: f32,
-    pub properties: ParticleWorldProperties,
+    properties: ParticleWorldProperties,
+    grid: ParticleHashGrid
 }
 
 impl ParticleWorld {
-    pub fn new(width: f32, height: f32) -> Self {
+    pub fn new(width: f32, height: f32, properties: ParticleWorldProperties) -> Self {
         ParticleWorld {
             width,
             height,
-            properties: ParticleWorldProperties::new(),
+            properties,
+            grid: ParticleHashGrid::new()
         }
     }
 
@@ -434,7 +436,6 @@ impl ParticleWorld {
     pub fn double_density_relaxiation(
         &self,
         particles_map: &mut HashMap<u32, Particle>,
-        hash_grid: &ParticleHashGrid,
         dt: f32,
     ) {
         let dt_pow = dt.powi(2);
@@ -449,7 +450,7 @@ impl ParticleWorld {
             let pos = p.pos;
             let mut neighbours_filtered: HashMap<u32, (Vec2, f32)> = HashMap::new();
 
-            self.get_neighbour_cell_particles(hash_grid, &p, &mut neighbours);
+            self.get_neighbour_cell_particles(&self.grid, &p, &mut neighbours);
             for neighbour_id in neighbours.iter() {
                 if *neighbour_id == id {
                     continue;
@@ -491,7 +492,6 @@ impl ParticleWorld {
     pub fn viscosity(
         &self,
         particles_map: &mut HashMap<u32, Particle>,
-        hash_grid: &ParticleHashGrid,
         dt: f32,
     ) {
         let interaction_radius_squared =
@@ -503,7 +503,7 @@ impl ParticleWorld {
             let p_pos = p.pos;
             let p_velocity = p.velocity;
 
-            self.get_neighbour_cell_particles(hash_grid, &p, &mut neighbours);
+            self.get_neighbour_cell_particles(&self.grid, &p, &mut neighbours);
             for neighbour_id in neighbours.iter() {
                 if *neighbour_id == id {
                     continue;
@@ -539,15 +539,14 @@ impl ParticleWorld {
 pub fn simulation_step(
     dt: f32,
     world: &mut ParticleWorld,
-    particle_grid: &mut ParticleHashGrid,
     particles_map: &mut HashMap<u32, Particle>,
     circle_shape: &CircleShape,
 ) {
-    particle_grid.neighbour_search(particles_map);
-    world.viscosity(particles_map, particle_grid, dt);
+    world.grid.neighbour_search(particles_map);
+    world.viscosity(particles_map, dt);
     world.apply_gravity(particles_map, dt);
     world.predict_positions(particles_map, dt);
-    world.double_density_relaxiation(particles_map, particle_grid, dt);
+    world.double_density_relaxiation(particles_map, dt);
     world.check_shape_collision(particles_map, circle_shape, dt);
     world.compute_velocity_and_check_bounds(particles_map, dt);
 }

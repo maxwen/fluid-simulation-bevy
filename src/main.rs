@@ -4,16 +4,17 @@ use bevy::ecs::system::SystemId;
 use bevy::input::common_conditions::input_toggle_active;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
-use bevy::window::{PrimaryWindow, WindowResized, WindowResolution};
+use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_egui::EguiContexts;
 use bevy_egui::EguiPlugin;
+use bevy_tokio_tasks::{TokioTasksPlugin, TokioTasksRuntime};
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
 use egui::Slider;
 use fluid_simulation_bevy::particle::{
-    simulation_step, CircleShape, Particle, ParticleHashGrid, ParticleWorld,
-    ParticleWorldProperties,
+    simulation_step, CircleShape, Particle, ParticleWorld, ParticleWorldProperties,
 };
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[derive(Copy, Clone, States, Debug, Hash, Eq, PartialEq)]
 enum SimulationState {
@@ -30,6 +31,7 @@ struct ParticleState {
 #[derive(Component)]
 struct ParticleProperties {
     color_grad: LinearGradient,
+    properties: ParticleWorldProperties,
 }
 
 impl ParticleProperties {
@@ -42,7 +44,10 @@ impl ParticleProperties {
             ])
             .build::<LinearGradient>()
             .unwrap();
-        ParticleProperties { color_grad: grad }
+        ParticleProperties {
+            color_grad: grad,
+            properties: ParticleWorldProperties::new(),
+        }
     }
 
     fn get_color_for_velocity(&self, velocity_squared: f32) -> Color {
@@ -50,10 +55,6 @@ impl ParticleProperties {
         let rgba = self.color_grad.at(mapped).to_rgba8();
         Color::srgba_u8(rgba[0], rgba[1], rgba[2], rgba[3])
     }
-}
-#[derive(Component)]
-struct SimulationGrid {
-    particle_grid: ParticleHashGrid,
 }
 
 #[derive(Component)]
@@ -67,11 +68,6 @@ struct SimulationParticles {
 }
 
 #[derive(Component)]
-struct SimulationProperties {
-    properties: ParticleWorldProperties,
-}
-
-#[derive(Component)]
 struct SimulationActivators {
     circle: CircleShape,
 }
@@ -79,17 +75,9 @@ struct SimulationActivators {
 #[derive(Resource)]
 struct CustomSystems(HashMap<String, SystemId>);
 
-impl SimulationGrid {
-    fn new() -> Self {
-        SimulationGrid {
-            particle_grid: ParticleHashGrid::new(),
-        }
-    }
-}
-
 impl SimulationWorld {
-    fn new(width: f32, height: f32) -> Self {
-        let world = ParticleWorld::new(width, height);
+    fn new(width: f32, height: f32, properties: ParticleWorldProperties) -> Self {
+        let world = ParticleWorld::new(width, height, properties);
         SimulationWorld { world }
     }
 }
@@ -102,19 +90,14 @@ impl SimulationParticles {
     }
 }
 
-impl SimulationProperties {
-    fn new(properties: ParticleWorldProperties) -> Self {
-        SimulationProperties { properties }
-    }
-}
-
 impl SimulationActivators {
     fn new() -> Self {
         SimulationActivators {
-            circle: CircleShape::new(Vec2::ZERO, 40.0, false)
+            circle: CircleShape::new(Vec2::ZERO, 40.0, false),
         }
     }
 }
+
 fn main() {
     let mut app = App::new();
 
@@ -125,7 +108,13 @@ fn main() {
         }),
         ..default()
     }))
-    .add_systems(Startup, (setup, create_particles).chain())
+    .add_systems(
+        Startup,
+        (
+            (setup_simulation, create_particles).chain(),
+            tokio_background_task,
+        ),
+    )
     .add_systems(FixedUpdate, update_simulation)
     .add_systems(
         Update,
@@ -133,13 +122,13 @@ fn main() {
             update_particles,
             on_mouse_event,
             on_keyboard_event,
-            on_resize_event,
             edit_simulation_properties.run_if(input_toggle_active(false, KeyCode::KeyP)),
         ),
     )
     .insert_resource(Time::<Fixed>::from_seconds(0.03125))
     .add_plugins(EguiPlugin)
-    .insert_state(SimulationState::Running);
+    .insert_state(SimulationState::Running)
+    .add_plugins(TokioTasksPlugin::default());
 
     let mut custom_systems = CustomSystems(HashMap::new());
     custom_systems
@@ -162,22 +151,19 @@ fn particle_to_world(window: &Window, camera: &Transform, position: Vec2) -> Vec
     )
 }
 
-fn setup(
-    mut commands: Commands,
-    window: Query<&Window, With<PrimaryWindow>>,
-) {
-    commands.spawn(Camera2d);
-    let window = window.single();
-    commands.spawn(SimulationGrid::new());
-
+fn setup_simulation(mut commands: Commands, window: Query<&Window, With<PrimaryWindow>>) {
+    let particle_properties = ParticleProperties::new();
+    let world = SimulationWorld::new(
+        window.single().width(),
+        window.single().height(),
+        particle_properties.properties,
+    );
     let mut particles = SimulationParticles::new();
-    let world = SimulationWorld::new(window.width(), window.height());
-
     world.world.create_particles(&mut particles.particles_map);
+
     commands.spawn(particles);
-    commands.spawn(SimulationProperties::new(world.world.properties));
     commands.spawn(world);
-    commands.spawn(ParticleProperties::new());
+    commands.spawn(particle_properties);
     commands.spawn(SimulationActivators::new());
 }
 
@@ -187,15 +173,17 @@ fn create_particles(
     mut materials: ResMut<Assets<ColorMaterial>>,
     simulation_particles: Query<&SimulationParticles>,
 ) {
-    let simulation_particles = simulation_particles.get_single().unwrap();
-    let real_particle_amount = simulation_particles.particles_map.len() as f32;
+    commands.spawn(Camera2d);
 
-    for id in 0..real_particle_amount as u32 {
+    let simulation_particles = simulation_particles.get_single().unwrap();
+    let real_particle_amount = simulation_particles.particles_map.len();
+
+    for id in 0..real_particle_amount {
         commands.spawn((
             Mesh2d(meshes.add(Circle::new(1.0).mesh())),
             MeshMaterial2d(materials.add(Color::srgb_u8(0, 0, 255))),
             Transform::from_xyz(0.0, 0.0, 0.0),
-            ParticleState { id },
+            ParticleState { id: id as u32 },
         ));
     }
 }
@@ -207,12 +195,12 @@ fn delete_particles(mut commands: Commands, mut particles: Query<(Entity, &Mesh2
     }
 }
 
-fn on_resize_event(mut resize_reader: EventReader<WindowResized>) {
-    for e in resize_reader.read() {
-        // When resolution is being changed
-        println!("{:.1} x {:.1}", e.width, e.height);
-    }
-}
+// fn on_resize_event(mut resize_reader: EventReader<WindowResized>) {
+//     for e in resize_reader.read() {
+//         // When resolution is being changed
+//         println!("{:.1} x {:.1}", e.width, e.height);
+//     }
+// }
 
 fn on_mouse_event(
     window: Query<&Window, With<PrimaryWindow>>,
@@ -241,7 +229,6 @@ fn on_mouse_event(
         }
     }
 }
-
 
 fn on_keyboard_event(
     keys: Res<ButtonInput<KeyCode>>,
@@ -279,7 +266,6 @@ fn on_keyboard_event(
 }
 
 fn update_particles(
-    _time: Res<Time>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<&Transform, (With<Camera>, Without<ParticleState>)>,
     mut ui_particles: Query<(
@@ -287,28 +273,26 @@ fn update_particles(
         &ParticleState,
         &mut MeshMaterial2d<ColorMaterial>,
     )>,
-    simulation_particles: Query<&SimulationParticles>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     particle_properties: Query<&ParticleProperties>,
-    world: Query<&SimulationWorld>,
+    simulation_particles: Query<&SimulationParticles>,
 ) {
     let window = window.single();
-    let t = camera.get_single().unwrap();
+    let camera = camera.get_single().unwrap();
     let particle_properties = particle_properties.get_single().unwrap();
     let simulation_particles = simulation_particles.get_single().unwrap();
-    let simulation_world = world.get_single().unwrap();
 
-    let particle_radius = simulation_world.world.properties.particle_radius;
+    let particle_radius_scale = Vec3::splat(particle_properties.properties.particle_radius);
     for (mut transform, p, color_handle) in &mut ui_particles {
         if let Some(simulation_particle) = simulation_particles.particles_map.get(&p.id) {
             let material = materials.get_mut(&*color_handle).unwrap();
             let velocity = simulation_particle.velocity;
             material.color = particle_properties.get_color_for_velocity(velocity.length_squared());
 
-            let pos = particle_to_world(window, t, simulation_particle.pos);
+            let pos = particle_to_world(window, camera, simulation_particle.pos);
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
-            transform.scale = Vec3::splat(particle_radius);
+            transform.scale = particle_radius_scale;
         }
     }
 }
@@ -318,12 +302,10 @@ fn update_simulation(
     state: Res<State<SimulationState>>,
     mut next_state: ResMut<NextState<SimulationState>>,
     mut world: Query<&mut SimulationWorld>,
-    mut grid: Query<&mut SimulationGrid>,
     mut simulation_particles: Query<&mut SimulationParticles>,
-    simulation_activators: Query<&SimulationActivators>
+    simulation_activators: Query<&SimulationActivators>,
 ) {
     let mut simulation_world = world.get_single_mut().unwrap();
-    let mut simulation_grid = grid.get_single_mut().unwrap();
     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
     let simulation_activators = simulation_activators.get_single().unwrap();
 
@@ -337,23 +319,47 @@ fn update_simulation(
     simulation_step(
         dt,
         &mut simulation_world.world,
-        &mut simulation_grid.particle_grid,
         &mut simulation_particles.particles_map,
-        &simulation_activators.circle
+        &simulation_activators.circle,
     );
+}
+
+fn tokio_background_task(runtime: ResMut<TokioTasksRuntime>) {
+    runtime.spawn_background_task(|mut ctx| async move {
+        loop {
+            ctx.run_on_main_thread(move |ctx| {
+                println!("Check task");
+                if let Some(state) = ctx.world.get_resource::<State<SimulationState>>() {
+                    match state.get() {
+                        SimulationState::Paused => {
+                            println!("Paused")
+                        }
+                        SimulationState::Running => {
+                            println!("Running")
+                        }
+                        SimulationState::Stepping => {
+                            println!("Stepping")
+                        }
+                    }
+                }
+            })
+            .await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
 }
 
 fn edit_simulation_properties(
     mut commands: Commands,
     mut simulation_world: Query<&mut SimulationWorld>,
     mut simulation_particles: Query<&mut SimulationParticles>,
-    mut simulation_properties: Query<&mut SimulationProperties>,
+    mut particle_properties: Query<&mut ParticleProperties>,
     mut egui_context: EguiContexts,
     custom_systems: Res<CustomSystems>,
 ) {
     let mut simulation_world = simulation_world.get_single_mut().unwrap();
     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
-    let mut properties = simulation_properties.get_single_mut().unwrap();
+    let mut properties = particle_properties.get_single_mut().unwrap();
 
     egui::Window::new("Properties").show(egui_context.ctx_mut(), |ui| {
         let mut amount = properties.properties.particle_num;
@@ -438,6 +444,10 @@ fn edit_simulation_properties(
         );
         properties.properties.sigma = sigma;
 
+        // let serialized = serde_json::to_string(&properties.properties).unwrap();
+        // println!("{}", serialized);
+        // let deserialized: ParticleWorldProperties = serde_json::from_str(&serialized).unwrap();
+
         if ui.button("Apply").clicked() {
             simulation_world
                 .world
@@ -445,7 +455,6 @@ fn edit_simulation_properties(
             simulation_world
                 .world
                 .create_particles(&mut simulation_particles.particles_map);
-
             let id = custom_systems.0["reset"];
             commands.run_system(id);
         }
@@ -463,14 +472,14 @@ fn recreate_particles(
         commands.entity(entity).despawn();
     }
     let simulation_particles = simulation_particles.get_single().unwrap();
-    let real_particle_amount = simulation_particles.particles_map.len() as f32;
+    let real_particle_amount = simulation_particles.particles_map.len();
 
-    for id in 0..real_particle_amount as u32 {
+    for id in 0..real_particle_amount {
         commands.spawn((
             Mesh2d(meshes.add(Circle::new(1.0).mesh())),
             MeshMaterial2d(materials.add(Color::srgb_u8(0, 0, 255))),
             Transform::from_xyz(0.0, 0.0, 0.0),
-            ParticleState { id },
+            ParticleState { id: id as u32 },
         ));
     }
 }
