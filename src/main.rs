@@ -4,6 +4,7 @@ use bevy::ecs::system::SystemId;
 use bevy::input::common_conditions::input_toggle_active;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
+use bevy::tasks::block_on;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_egui::EguiContexts;
 use bevy_egui::EguiPlugin;
@@ -11,16 +12,24 @@ use bevy_tokio_tasks::{TokioTasksPlugin, TokioTasksRuntime};
 use colorgrad::{Color as GradColor, Gradient, GradientBuilder, LinearGradient};
 use egui::Slider;
 use fluid_simulation_bevy::particle::{
-    simulation_step, CircleShape, Particle, ParticleWorld, ParticleWorldProperties,
+    simulation_step_test, CircleShape, Particle, ParticleWorld, ParticleWorldProperties,
 };
 use std::collections::HashMap;
-use std::time::Duration;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 
 #[derive(Copy, Clone, States, Debug, Hash, Eq, PartialEq)]
 enum SimulationState {
     Running,
     Paused,
     Stepping,
+}
+
+#[derive(Copy, Clone)]
+struct SimulationStateHolder {
+    state: SimulationState,
 }
 
 #[derive(Copy, Clone, Component)]
@@ -32,6 +41,7 @@ struct ParticleState {
 struct ParticleProperties {
     color_grad: LinearGradient,
     properties: ParticleWorldProperties,
+    edit_properties: ParticleWorldProperties,
 }
 
 impl ParticleProperties {
@@ -47,6 +57,7 @@ impl ParticleProperties {
         ParticleProperties {
             color_grad: grad,
             properties: ParticleWorldProperties::new(),
+            edit_properties: ParticleWorldProperties::new(),
         }
     }
 
@@ -56,6 +67,12 @@ impl ParticleProperties {
         Color::srgba_u8(rgba[0], rgba[1], rgba[2], rgba[3])
     }
 }
+
+static mut PARTICLE_WORLD: Option<Arc<RwLock<SimulationWorld>>> = None;
+
+static mut PARTICLE_MAP: Option<Arc<RwLock<HashMap<u32, Particle>>>> = None;
+
+static mut SIMULATION_STATE: Option<Arc<RwLock<SimulationStateHolder>>> = None;
 
 #[derive(Component)]
 struct SimulationWorld {
@@ -101,6 +118,12 @@ impl SimulationActivators {
 fn main() {
     let mut app = App::new();
 
+    let state = SimulationState::Running;
+    unsafe {
+        block_on(async {
+            SIMULATION_STATE = Some(Arc::new(RwLock::new(SimulationStateHolder { state })));
+        });
+    }
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             resolution: WindowResolution::new(800., 600.).with_scale_factor_override(1.0),
@@ -110,12 +133,9 @@ fn main() {
     }))
     .add_systems(
         Startup,
-        (
-            (setup_simulation, create_particles).chain(),
-            tokio_background_task,
-        ),
+        ((setup_simulation, create_particles, tokio_background_task).chain(),),
     )
-    .add_systems(FixedUpdate, update_simulation)
+    // .add_systems(FixedUpdate, update_simulation)
     .add_systems(
         Update,
         (
@@ -127,7 +147,7 @@ fn main() {
     )
     .insert_resource(Time::<Fixed>::from_seconds(0.03125))
     .add_plugins(EguiPlugin)
-    .insert_state(SimulationState::Running)
+    .insert_state(state)
     .add_plugins(TokioTasksPlugin::default());
 
     let mut custom_systems = CustomSystems(HashMap::new());
@@ -153,16 +173,36 @@ fn particle_to_world(window: &Window, camera: &Transform, position: Vec2) -> Vec
 
 fn setup_simulation(mut commands: Commands, window: Query<&Window, With<PrimaryWindow>>) {
     let particle_properties = ParticleProperties::new();
-    let world = SimulationWorld::new(
-        window.single().width(),
-        window.single().height(),
-        particle_properties.properties,
-    );
-    let mut particles = SimulationParticles::new();
-    world.world.create_particles(&mut particles.particles_map);
+    // let world = SimulationWorld::new(
+    //     window.single().width(),
+    //     window.single().height(),
+    //     particle_properties.properties,
+    // );
 
-    commands.spawn(particles);
-    commands.spawn(world);
+    unsafe {
+        PARTICLE_WORLD = Some(Arc::new(RwLock::new(SimulationWorld::new(
+            window.single().width(),
+            window.single().height(),
+            particle_properties.properties,
+        ))));
+    }
+
+    // let mut particles = SimulationParticles::new();
+    unsafe {
+        PARTICLE_MAP = Some(Arc::new(RwLock::new(HashMap::new())));
+    }
+
+    block_on(async {
+        unsafe {
+            let particle_world = PARTICLE_WORLD.as_ref().unwrap().write().await;
+            let mut particle_map = PARTICLE_MAP.as_ref().unwrap().write().await;
+            particle_world.world.create_particles(&mut particle_map);
+        }
+    });
+    // world.world.create_particles(&mut particles.particles_map);
+
+    // commands.spawn(particles);
+    // commands.spawn(world);
     commands.spawn(particle_properties);
     commands.spawn(SimulationActivators::new());
 }
@@ -171,12 +211,20 @@ fn create_particles(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    simulation_particles: Query<&SimulationParticles>,
+    // simulation_particles: Query<&SimulationParticles>,
 ) {
     commands.spawn(Camera2d);
 
-    let simulation_particles = simulation_particles.get_single().unwrap();
-    let real_particle_amount = simulation_particles.particles_map.len();
+    // let simulation_particles = simulation_particles.get_single().unwrap();
+    // let real_particle_amount = simulation_particles.particles_map.len();
+    let mut real_particle_amount = 0;
+
+    block_on(async {
+        unsafe {
+            let particle_map = PARTICLE_MAP.as_ref().unwrap().read().await;
+            real_particle_amount = particle_map.len()
+        }
+    });
 
     for id in 0..real_particle_amount {
         commands.spawn((
@@ -233,8 +281,8 @@ fn on_mouse_event(
 fn on_keyboard_event(
     keys: Res<ButtonInput<KeyCode>>,
     mut exit: EventWriter<AppExit>,
-    simulation_world: Query<&SimulationWorld>,
-    mut simulation_particles: Query<&mut SimulationParticles>,
+    // simulation_world: Query<&SimulationWorld>,
+    // mut simulation_particles: Query<&mut SimulationParticles>,
     state: Res<State<SimulationState>>,
     mut next_state: ResMut<NextState<SimulationState>>,
 ) {
@@ -243,25 +291,54 @@ fn on_keyboard_event(
     } else if keys.just_pressed(KeyCode::KeyQ) {
         exit.send(AppExit::Success);
     } else if keys.just_pressed(KeyCode::KeyS) {
+        let mut next_state_value = *state.get();
         match state.get() {
             SimulationState::Paused | SimulationState::Running => {
-                next_state.set(SimulationState::Stepping)
+                next_state_value = SimulationState::Stepping;
             }
-            SimulationState::Stepping => next_state.set(SimulationState::Running),
+            SimulationState::Stepping => {
+                next_state_value = SimulationState::Running;
+            }
         }
+        next_state.set(next_state_value);
+        block_on(async {
+            unsafe {
+                let mut state_holder = SIMULATION_STATE.as_ref().unwrap().write().await;
+                state_holder.state = next_state_value
+            }
+        });
     } else if keys.just_pressed(KeyCode::Space) {
+        let mut next_state_value = *state.get();
+
         match state.get() {
             SimulationState::Paused | SimulationState::Stepping => {
-                next_state.set(SimulationState::Running)
+                next_state_value = SimulationState::Running;
             }
-            SimulationState::Running => next_state.set(SimulationState::Paused),
+            SimulationState::Running => {
+                next_state_value = SimulationState::Paused;
+            }
         }
+        next_state.set(next_state_value);
+        block_on(async {
+            unsafe {
+                let mut state_holder = SIMULATION_STATE.as_ref().unwrap().write().await;
+                state_holder.state = next_state_value
+            }
+        });
     } else if keys.just_pressed(KeyCode::KeyR) {
-        let simulation_world = simulation_world.get_single().unwrap();
-        let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
-        simulation_world
-            .world
-            .create_particles(&mut simulation_particles.particles_map);
+        block_on(async {
+            unsafe {
+                let mut particle_map = PARTICLE_MAP.as_ref().unwrap().write().await;
+                let particle_world = PARTICLE_WORLD.as_ref().unwrap().read().await;
+                particle_world.world.create_particles(&mut particle_map);
+            }
+        });
+
+        // let simulation_world = simulation_world.get_single().unwrap();
+        // let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
+        // simulation_world
+        //     .world
+        //     .create_particles(&mut simulation_particles.particles_map);
     }
 }
 
@@ -275,102 +352,139 @@ fn update_particles(
     )>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     particle_properties: Query<&ParticleProperties>,
-    simulation_particles: Query<&SimulationParticles>,
+    // simulation_particles: Query<&SimulationParticles>,
 ) {
     let window = window.single();
     let camera = camera.get_single().unwrap();
     let particle_properties = particle_properties.get_single().unwrap();
-    let simulation_particles = simulation_particles.get_single().unwrap();
-
+    // let simulation_particles = simulation_particles.get_single().unwrap();
     let particle_radius_scale = Vec3::splat(particle_properties.properties.particle_radius);
-    for (mut transform, p, color_handle) in &mut ui_particles {
-        if let Some(simulation_particle) = simulation_particles.particles_map.get(&p.id) {
-            let material = materials.get_mut(&*color_handle).unwrap();
-            let velocity = simulation_particle.velocity;
-            material.color = particle_properties.get_color_for_velocity(velocity.length_squared());
 
-            let pos = particle_to_world(window, camera, simulation_particle.pos);
-            transform.translation.x = pos.x;
-            transform.translation.y = pos.y;
-            transform.scale = particle_radius_scale;
+    block_on(async {
+        unsafe {
+            if let Ok(particle_map_lock) = PARTICLE_MAP.as_ref().unwrap().try_read() {
+                let particle_map = particle_map_lock.deref();
+
+                for (mut transform, p, color_handle) in &mut ui_particles {
+                    if let Some(simulation_particle) = particle_map.get(&p.id) {
+                        let material = materials.get_mut(&*color_handle).unwrap();
+                        let velocity = simulation_particle.velocity;
+                        material.color =
+                            particle_properties.get_color_for_velocity(velocity.length_squared());
+
+                        let pos = particle_to_world(window, camera, simulation_particle.pos);
+                        transform.translation.x = pos.x;
+                        transform.translation.y = pos.y;
+                        transform.scale = particle_radius_scale;
+                    }
+                }
+            } else {
+                // println!("try_read lock failed")
+            }
         }
-    }
+    });
 }
 
-fn update_simulation(
-    _fixed_time: Res<Time<Fixed>>,
-    state: Res<State<SimulationState>>,
-    mut next_state: ResMut<NextState<SimulationState>>,
-    mut world: Query<&mut SimulationWorld>,
-    mut simulation_particles: Query<&mut SimulationParticles>,
-    simulation_activators: Query<&SimulationActivators>,
-) {
-    let mut simulation_world = world.get_single_mut().unwrap();
-    let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
-    let simulation_activators = simulation_activators.get_single().unwrap();
-
-    match state.get() {
-        SimulationState::Paused => return,
-        SimulationState::Running => {}
-        SimulationState::Stepping => next_state.set(SimulationState::Paused),
-    }
-
-    let dt = 0.5; //fixed_time.delta_secs();
-    simulation_step(
-        dt,
-        &mut simulation_world.world,
-        &mut simulation_particles.particles_map,
-        &simulation_activators.circle,
-    );
-}
+// fn update_simulation(
+//     _fixed_time: Res<Time<Fixed>>,
+//     state: Res<State<SimulationState>>,
+//     mut next_state: ResMut<NextState<SimulationState>>,
+//     mut world: Query<&mut SimulationWorld>,
+//     mut simulation_particles: Query<&mut SimulationParticles>,
+//     simulation_activators: Query<&SimulationActivators>,
+// ) {
+//     let mut simulation_world = world.get_single_mut().unwrap();
+//     let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
+//     let simulation_activators = simulation_activators.get_single().unwrap();
+//
+//     match state.get() {
+//         SimulationState::Paused => return,
+//         SimulationState::Running => {}
+//         SimulationState::Stepping => next_state.set(SimulationState::Paused),
+//     }
+//
+//     let dt = 0.5; //fixed_time.delta_secs();
+//     simulation_step(
+//         dt,
+//         &mut simulation_world.world,
+//         &mut simulation_particles.particles_map,
+//         &simulation_activators.circle,
+//     );
+// }
 
 fn tokio_background_task(runtime: ResMut<TokioTasksRuntime>) {
     runtime.spawn_background_task(|mut ctx| async move {
         loop {
-            ctx.run_on_main_thread(move |ctx| {
-                println!("Check task");
-                if let Some(state) = ctx.world.get_resource::<State<SimulationState>>() {
-                    match state.get() {
-                        SimulationState::Paused => {
-                            println!("Paused")
-                        }
-                        SimulationState::Running => {
-                            println!("Running")
-                        }
-                        SimulationState::Stepping => {
-                            println!("Stepping")
-                        }
+            let mut next_state: Option<SimulationState> = None;
+            let now = Instant::now();
+            block_on(async {
+                unsafe {
+                    let state_holder = SIMULATION_STATE.as_ref().unwrap().read().await;
+                    if state_holder.state != SimulationState::Paused {
+                        let mut particle_world = PARTICLE_WORLD.as_ref().unwrap().write().await;
+                        let mut particle_map = PARTICLE_MAP.as_ref().unwrap().write().await;
+
+                        let dt = 0.5;
+                        simulation_step_test(dt, &mut particle_world.world, &mut particle_map);
+                    }
+                    if state_holder.state == SimulationState::Stepping {
+                        next_state = Some(SimulationState::Paused)
                     }
                 }
-            })
-            .await;
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            });
+
+            if next_state.is_some() {
+                ctx.run_on_main_thread(move |ctx| {
+                    let next_state_value = next_state.unwrap();
+                    if let Some(mut next) =
+                        ctx.world.get_resource_mut::<NextState<SimulationState>>()
+                    {
+                        next.set(next_state_value);
+
+                        block_on(async {
+                            unsafe {
+                                let mut state_holder =
+                                    SIMULATION_STATE.as_mut().unwrap().write().await;
+                                state_holder.state = next_state_value
+                            }
+                        });
+                    }
+                })
+                .await;
+            }
+            let used = now.elapsed().as_millis();
+            // println!("{}", used);
+            if used < 33 {
+                tokio::time::sleep(Duration::from_millis((33 - used) as u64)).await;
+            }
+            // tokio::time::sleep(Duration::from_millis(33)).await;
+
         }
     });
 }
 
 fn edit_simulation_properties(
     mut commands: Commands,
-    mut simulation_world: Query<&mut SimulationWorld>,
-    mut simulation_particles: Query<&mut SimulationParticles>,
+    // mut simulation_world: Query<&mut SimulationWorld>,
+    // mut simulation_particles: Query<&mut SimulationParticles>,
     mut particle_properties: Query<&mut ParticleProperties>,
     mut egui_context: EguiContexts,
     custom_systems: Res<CustomSystems>,
 ) {
-    let mut simulation_world = simulation_world.get_single_mut().unwrap();
-    let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
+    // let mut simulation_world = simulation_world.get_single_mut().unwrap();
+    // let mut simulation_particles = simulation_particles.get_single_mut().unwrap();
     let mut properties = particle_properties.get_single_mut().unwrap();
 
     egui::Window::new("Properties").show(egui_context.ctx_mut(), |ui| {
-        let mut amount = properties.properties.particle_num;
-        let mut radius = properties.properties.particle_radius;
-        let mut gravity = properties.properties.gravity != Vec2::ZERO;
-        let mut k = properties.properties.k;
-        let mut k_near = properties.properties.k_near;
-        let mut rest_density = properties.properties.rest_density;
-        let _interaction_radius = properties.properties.interaction_radius;
-        let mut beta = properties.properties.beta;
-        let mut sigma = properties.properties.sigma;
+        let mut amount = properties.edit_properties.particle_num;
+        let mut radius = properties.edit_properties.particle_radius;
+        let mut gravity = properties.edit_properties.gravity != Vec2::ZERO;
+        let mut k = properties.edit_properties.k;
+        let mut k_near = properties.edit_properties.k_near;
+        let mut rest_density = properties.edit_properties.rest_density;
+        let _interaction_radius = properties.edit_properties.interaction_radius;
+        let mut beta = properties.edit_properties.beta;
+        let mut sigma = properties.edit_properties.sigma;
 
         ui.add(
             Slider::new(&mut amount, 500.0..=3000.0)
@@ -378,7 +492,7 @@ fn edit_simulation_properties(
                 .text("Amount")
                 .step_by(100.0),
         );
-        properties.properties.particle_num = amount;
+        properties.edit_properties.particle_num = amount;
 
         ui.add(
             Slider::new(&mut radius, 2.0..=6.0)
@@ -386,14 +500,14 @@ fn edit_simulation_properties(
                 .text("Size")
                 .step_by(1.0),
         );
-        properties.properties.particle_radius = radius;
-        properties.properties.interaction_radius = 5.0 * radius;
+        properties.edit_properties.particle_radius = radius;
+        properties.edit_properties.interaction_radius = 5.0 * radius;
 
         ui.checkbox(&mut gravity, "Gravity");
         if gravity {
-            properties.properties.gravity = Vec2::new(0.0, 1.0);
+            properties.edit_properties.gravity = Vec2::new(0.0, 1.0);
         } else {
-            properties.properties.gravity = Vec2::ZERO
+            properties.edit_properties.gravity = Vec2::ZERO
         }
 
         ui.add(
@@ -402,7 +516,7 @@ fn edit_simulation_properties(
                 .text("rest density")
                 .step_by(1.0),
         );
-        properties.properties.rest_density = rest_density;
+        properties.edit_properties.rest_density = rest_density;
 
         // ui.add(
         //     Slider::new(&mut interaction_radius, 10.0..=40.0)
@@ -410,7 +524,7 @@ fn edit_simulation_properties(
         //         .text("interaction radius")
         //         .step_by(1.0),
         // );
-        // properties.properties.interaction_radius = interaction_radius;
+        // properties.edit_properties.interaction_radius = interaction_radius;
 
         ui.add(
             Slider::new(&mut k, 0.0..=1.5)
@@ -418,7 +532,7 @@ fn edit_simulation_properties(
                 .text("k")
                 .step_by(0.01),
         );
-        properties.properties.k = k;
+        properties.edit_properties.k = k;
 
         ui.add(
             Slider::new(&mut k_near, 0.0..=5.0)
@@ -426,7 +540,7 @@ fn edit_simulation_properties(
                 .text("k-near")
                 .step_by(0.01),
         );
-        properties.properties.k_near = k_near;
+        properties.edit_properties.k_near = k_near;
 
         ui.add(
             Slider::new(&mut beta, 0.0..=0.5)
@@ -434,7 +548,7 @@ fn edit_simulation_properties(
                 .text("beta")
                 .step_by(0.01),
         );
-        properties.properties.beta = beta;
+        properties.edit_properties.beta = beta;
 
         ui.add(
             Slider::new(&mut sigma, 0.0..=5.0)
@@ -442,19 +556,26 @@ fn edit_simulation_properties(
                 .text("sigma")
                 .step_by(0.01),
         );
-        properties.properties.sigma = sigma;
+        properties.edit_properties.sigma = sigma;
 
-        // let serialized = serde_json::to_string(&properties.properties).unwrap();
+        // let serialized = serde_json::to_string(&properties.edit_properties).unwrap();
         // println!("{}", serialized);
         // let deserialized: ParticleWorldProperties = serde_json::from_str(&serialized).unwrap();
 
         if ui.button("Apply").clicked() {
-            simulation_world
-                .world
-                .change_simulation_properties(properties.properties);
-            simulation_world
-                .world
-                .create_particles(&mut simulation_particles.particles_map);
+            block_on(async {
+                unsafe {
+                    let mut particle_world = PARTICLE_WORLD.as_ref().unwrap().write().await;
+                    let mut particle_map = PARTICLE_MAP.as_ref().unwrap().write().await;
+                    properties.properties = properties.edit_properties;
+
+                    particle_world
+                        .world
+                        .change_simulation_properties(properties.properties);
+                    particle_world.world.create_particles(&mut particle_map);
+                }
+            });
+
             let id = custom_systems.0["reset"];
             commands.run_system(id);
         }
@@ -465,14 +586,21 @@ fn recreate_particles(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    simulation_particles: Query<&SimulationParticles>,
+    // simulation_particles: Query<&SimulationParticles>,
     mut particles: Query<(Entity, &Mesh2d)>,
 ) {
     for (entity, _) in &mut particles {
         commands.entity(entity).despawn();
     }
-    let simulation_particles = simulation_particles.get_single().unwrap();
-    let real_particle_amount = simulation_particles.particles_map.len();
+    // let simulation_particles = simulation_particles.get_single().unwrap();
+    let mut real_particle_amount = 0;
+
+    block_on(async {
+        unsafe {
+            let particle_map = PARTICLE_MAP.as_ref().unwrap().read().await;
+            real_particle_amount = particle_map.len()
+        }
+    });
 
     for id in 0..real_particle_amount {
         commands.spawn((

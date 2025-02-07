@@ -550,3 +550,17 @@ pub fn simulation_step(
     world.check_shape_collision(particles_map, circle_shape, dt);
     world.compute_velocity_and_check_bounds(particles_map, dt);
 }
+
+pub fn simulation_step_test(
+    dt: f32,
+    world: &mut ParticleWorld,
+    particles_map: &mut HashMap<u32, Particle>,
+) {
+    world.grid.neighbour_search(particles_map);
+    world.viscosity(particles_map, dt);
+    world.apply_gravity(particles_map, dt);
+    world.predict_positions(particles_map, dt);
+    world.double_density_relaxiation(particles_map, dt);
+    // world.check_shape_collision(particles_map, circle_shape, dt);
+    world.compute_velocity_and_check_bounds(particles_map, dt);
+}
